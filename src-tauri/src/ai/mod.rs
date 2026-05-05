@@ -1,3 +1,3 @@
 mod sidecar;
 
-pub use sidecar::{AiBridge, AiEvent};
+pub use sidecar::AiBridge;

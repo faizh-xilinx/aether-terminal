@@ -6,7 +6,7 @@ use anyhow::Context;
 use russh_keys::key::PublicKey;
 use russh_keys::PublicKeyBase64;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostKeyDecision {
     /// Host is in `known_hosts` and the key matches. Connection allowed.
     Match,

@@ -3,7 +3,6 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -12,16 +11,6 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::error::{AetherError, AetherResult};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum AiEvent {
-    AssistantText { text: String },
-    ToolStart { name: String },
-    ToolEnd { name: String, ok: bool },
-    Error { message: String },
-    Done,
-}
 
 struct PendingRequest {
     tx: oneshot::Sender<Result<Value, String>>,

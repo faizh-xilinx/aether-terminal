@@ -89,6 +89,7 @@ impl SshSession {
             port: opts.port,
             trust_unknown: opts.trust_unknown_host_key,
         };
+        #[allow(unused_mut)]
         let mut handle = russh::client::connect(config, (opts.host.as_str(), opts.port), handler)
             .await
             .map_err(|e| AetherError::Ssh(format!("connect failed: {e}")))?;
