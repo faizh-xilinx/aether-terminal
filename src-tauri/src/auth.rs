@@ -548,6 +548,53 @@ mod tests {
         assert!(after_forget.is_none() || after_forget.as_deref() == Some(""));
     }
 
+    /// End-to-end persistence test: save_token → wipe in-process state
+    /// (simulating a fresh launch) → hydrate_from_disk → active_token
+    /// returns the original value. This is the regression net for the
+    /// 0.1.1 bug "Cursor login not persistent".
+    #[cfg(windows)]
+    #[test]
+    fn save_then_simulated_restart_yields_active_token() {
+        let _g = ENV_LOCK.lock().unwrap();
+
+        // Back up any existing real session so we don't clobber the user's
+        // live state during the test, then start from a clean slate.
+        let prior = vault::get(VAULT_KEY).ok().flatten();
+        let prior_disk = secrets::load().ok().flatten();
+        cache_set(None);
+        let _ = vault::delete(VAULT_KEY);
+        let _ = secrets::forget();
+        std::env::remove_var("CURSOR_API_KEY");
+
+        save_token("crsr_persistence_marker_e2e").expect("save_token");
+
+        // Simulate a fresh Aether process: drop the cache, then go
+        // through the same hydration path the Tauri setup hook runs.
+        cache_set(None);
+        assert!(
+            hydrate_from_disk().expect("hydrate"),
+            "expected a persisted session to hydrate"
+        );
+        let active = active_token().expect("active_token");
+        assert_eq!(active.as_deref(), Some("crsr_persistence_marker_e2e"));
+
+        // Cleanup. Then restore prior real state so the developer's
+        // actual sign-in is unchanged after the test runs.
+        forget_token().expect("forget");
+        assert!(
+            active_token().expect("active after forget").is_none(),
+            "forget_token did not clear the active token"
+        );
+
+        if let Some(t) = prior {
+            let _ = vault::set(VAULT_KEY, &t);
+        }
+        if let Some(t) = prior_disk {
+            let _ = secrets::store(&t);
+        }
+        cache_set(None);
+    }
+
     #[test]
     fn token_looks_like_api_key_recognises_real_shapes() {
         assert!(token_looks_like_api_key("crsr_abc123"));
