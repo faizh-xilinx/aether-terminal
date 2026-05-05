@@ -47,18 +47,37 @@ export function AuthDialog({ open, onOpenChange }: Props) {
 
   const signInWithBrowser = async () => {
     setError(null);
+
+    // Fast path: an auth.json may already exist from a previous CLI login,
+    // or from your Cursor IDE session — in either case we can adopt it
+    // directly without forcing another browser dance.
+    try {
+      if (await ipc.authAdoptCliToken()) {
+        await auth.refresh();
+        onOpenChange(false);
+        return;
+      }
+    } catch {
+      // Fall through to the interactive flow.
+    }
+
     if (cliAvailable) {
       setStage({ kind: "browser-login" });
       try {
         await ipc.authRunCliLogin();
-        const adopted = await ipc.authAdoptCliToken();
-        if (!adopted) {
-          throw new Error(
-            "cursor-agent finished but no token was found in ~/.cursor/auth.json"
-          );
+        // Brief settle window: cursor-agent may write auth.json fractions
+        // of a second after exiting.
+        for (let i = 0; i < 10; i++) {
+          if (await ipc.authAdoptCliToken()) {
+            await auth.refresh();
+            onOpenChange(false);
+            return;
+          }
+          await new Promise((r) => setTimeout(r, 200));
         }
-        await auth.refresh();
-        onOpenChange(false);
+        throw new Error(
+          "cursor-agent finished but no auth.json was found in any known location. Did you complete the browser login?"
+        );
       } catch (e) {
         setError(String(e));
         setStage({ kind: "idle" });

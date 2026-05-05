@@ -144,24 +144,85 @@ pub struct CliToken {
     pub user_email: Option<String>,
 }
 
-fn cursor_dir() -> Option<PathBuf> {
+/// Every well-known location an `auth.json` may live in, on the host OS.
+///
+/// The official cursor.com docs reference `~/.cursor/auth.json` for the CLI,
+/// but the **Cursor IDE** itself stores the same shape file at
+/// `%APPDATA%\Cursor\auth.json` on Windows (capital "C", under
+/// AppData\Roaming, not the dot-prefixed cursor-agent dir). When a user is
+/// already signed in to the IDE we want to seamlessly reuse that token
+/// instead of forcing them through `cursor-agent login` again.
+fn auth_json_candidates() -> Vec<PathBuf> {
+    // When `CURSOR_CONFIG_DIR` is explicitly set, treat it as a hard
+    // override — useful for tests and for power users who want a custom
+    // home. We deliberately skip the well-known locations in that case so
+    // the override is total.
     if let Ok(custom) = std::env::var("CURSOR_CONFIG_DIR") {
-        return Some(PathBuf::from(custom));
+        return vec![PathBuf::from(custom).join("auth.json")];
     }
-    dirs::home_dir().map(|h| h.join(".cursor"))
+
+    let mut out: Vec<PathBuf> = Vec::new();
+
+    if let Some(home) = dirs::home_dir() {
+        out.push(home.join(".cursor").join("auth.json"));
+        out.push(home.join(".cursor-agent").join("auth.json"));
+        out.push(home.join(".config").join("cursor-agent").join("auth.json"));
+    }
+
+    if cfg!(windows) {
+        if let Ok(roaming) = std::env::var("APPDATA") {
+            out.push(PathBuf::from(&roaming).join("Cursor").join("auth.json"));
+            out.push(PathBuf::from(&roaming).join("cursor-agent").join("auth.json"));
+        }
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            out.push(PathBuf::from(&local).join("cursor-agent").join("auth.json"));
+            out.push(PathBuf::from(&local).join("Cursor").join("auth.json"));
+        }
+    }
+
+    if cfg!(target_os = "macos") {
+        if let Some(home) = dirs::home_dir() {
+            out.push(home.join("Library").join("Application Support").join("Cursor").join("auth.json"));
+            out.push(home.join("Library").join("Application Support").join("cursor-agent").join("auth.json"));
+        }
+    }
+
+    // De-dupe while preserving order.
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|p| seen.insert(p.clone()));
+    out
 }
 
 pub fn read_cursor_cli_token() -> anyhow::Result<Option<CliToken>> {
-    let Some(dir) = cursor_dir() else {
+    // Pick the most recently-modified auth.json among all known locations.
+    // Falls back to the first existing one if mtimes can't be read. This
+    // lets us reuse a freshly-completed CLI login over a stale IDE login,
+    // and vice-versa.
+    let candidates = auth_json_candidates();
+    let mut best: Option<(PathBuf, std::time::SystemTime)> = None;
+    for path in &candidates {
+        if !path.exists() {
+            continue;
+        }
+        let mtime = std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        match &best {
+            None => best = Some((path.clone(), mtime)),
+            Some((_, t)) if mtime > *t => best = Some((path.clone(), mtime)),
+            _ => {}
+        }
+    }
+    let Some((path, _)) = best else {
+        tracing::debug!("no auth.json found in any well-known location");
         return Ok(None);
     };
-    let path = dir.join("auth.json");
-    if !path.exists() {
-        return Ok(None);
-    }
-    let raw = std::fs::read_to_string(&path).context("reading ~/.cursor/auth.json")?;
-    let value: serde_json::Value =
-        serde_json::from_str(&raw).context("parsing ~/.cursor/auth.json")?;
+
+    tracing::info!(path = %path.display(), "reading cursor auth.json");
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .with_context(|| format!("parsing {}", path.display()))?;
 
     // The file format is not officially stable; probe a few likely fields.
     let access_token = ["accessToken", "access_token", "apiKey", "api_key", "token"]
