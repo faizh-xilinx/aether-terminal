@@ -80,15 +80,12 @@ impl AiBridge {
                         if let Some(err) = value.get("error") {
                             let _ = req.tx.send(Err(err.to_string()));
                         } else {
-                            let _ = req.tx.send(Ok(value
-                                .get("result")
-                                .cloned()
-                                .unwrap_or(Value::Null)));
+                            let _ = req
+                                .tx
+                                .send(Ok(value.get("result").cloned().unwrap_or(Value::Null)));
                         }
                     }
-                } else if let Some(event_kind) =
-                    value.get("event").and_then(|v| v.as_str())
-                {
+                } else if let Some(event_kind) = value.get("event").and_then(|v| v.as_str()) {
                     let _ = app_for_reader.emit(&format!("ai:{event_kind}"), value);
                 }
             }
@@ -118,8 +115,8 @@ impl AiBridge {
             .insert(id.clone(), PendingRequest { tx });
 
         let frame = json!({ "id": id, "method": method, "params": params });
-        let line = serde_json::to_string(&frame)
-            .map_err(|e| AetherError::Other(anyhow::anyhow!(e)))?;
+        let line =
+            serde_json::to_string(&frame).map_err(|e| AetherError::Other(anyhow::anyhow!(e)))?;
 
         {
             let mut stdin = self.stdin.lock().await;
@@ -165,8 +162,11 @@ impl AiBridge {
     }
 
     pub async fn send(&self, agent_id: &str, prompt: &str) -> AetherResult<Value> {
-        self.rpc("agent.send", json!({ "agentId": agent_id, "prompt": prompt }))
-            .await
+        self.rpc(
+            "agent.send",
+            json!({ "agentId": agent_id, "prompt": prompt }),
+        )
+        .await
     }
 
     pub async fn dispose(&self, agent_id: &str) -> AetherResult<()> {

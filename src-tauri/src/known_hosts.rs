@@ -223,10 +223,80 @@ mod tests {
     }
 
     #[test]
+    fn skips_blank_and_comment_lines() {
+        let raw = "\n   \n# comment line\n@cert-authority *.foo.com ssh-rsa AAAA\nrealhost ssh-ed25519 BBBB\n";
+        let e = parse(raw);
+        // @cert-authority is a marker line we don't support; skip it.
+        // realhost should be the only entry surfaced.
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].host, "realhost");
+    }
+
+    #[test]
+    fn skips_hashed_entries() {
+        let raw = "|1|abc=|def= ssh-ed25519 KEY\nplain.host ssh-ed25519 KEY\n";
+        let e = parse(raw);
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].host, "plain.host");
+    }
+
+    #[test]
+    fn comma_separated_hosts_split_into_entries() {
+        let raw = "host1,host2,host3 ssh-ed25519 KEY\n";
+        let e = parse(raw);
+        assert_eq!(e.len(), 3);
+        assert_eq!(e[0].host, "host1");
+        assert_eq!(e[1].host, "host2");
+        assert_eq!(e[2].host, "host3");
+    }
+
+    #[test]
     fn pattern_match_simple() {
         assert!(matches_pattern("github.com", "github.com"));
         assert!(!matches_pattern("github.com", "gist.github.com"));
         assert!(matches_pattern("*.github.com", "gist.github.com"));
         assert!(!matches_pattern("*.github.com", "evil.com"));
+    }
+
+    #[test]
+    fn pattern_match_question_wildcard() {
+        // Single-char wildcard in pattern.
+        assert!(matches_pattern("host?.com", "host1.com"));
+        assert!(matches_pattern("host?.com", "hostx.com"));
+        assert!(!matches_pattern("host?.com", "host10.com"));
+    }
+
+    #[test]
+    fn pattern_match_does_not_leak_dot_as_any() {
+        // `.` in the pattern must match a literal dot, not "any character",
+        // otherwise `evil-com` would match `evil.com`.
+        assert!(matches_pattern("evil.com", "evil.com"));
+        assert!(!matches_pattern("evil.com", "evilxcom"));
+    }
+
+    #[test]
+    fn host_lookup_keys_port_22() {
+        let keys = host_lookup_keys("github.com", 22);
+        // For port 22 we should look up the bare host AND the bracketed form.
+        assert!(keys.contains(&"github.com".to_string()));
+        assert!(keys.contains(&"[github.com]:22".to_string()));
+    }
+
+    #[test]
+    fn host_lookup_keys_non_default_port() {
+        let keys = host_lookup_keys("internal", 2222);
+        // For non-default ports, only the bracketed form is conventional.
+        assert!(keys.contains(&"[internal]:2222".to_string()));
+        assert!(!keys.contains(&"internal".to_string()));
+    }
+
+    #[test]
+    fn malformed_lines_are_skipped() {
+        // Line with only one field is incomplete and must be ignored without
+        // panicking.
+        let raw = "incomplete-line\nrealhost ssh-rsa KEY\n";
+        let e = parse(raw);
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].host, "realhost");
     }
 }

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
-use tauri_plugin_shell::ShellExt;
+use tauri_plugin_opener::OpenerExt;
 
 use crate::ai::AiBridge;
 use crate::auth::{self, AuthStatus};
@@ -147,14 +147,16 @@ pub async fn ai_create_agent(
     cwd: Option<String>,
     model: Option<String>,
 ) -> AetherResult<String> {
-    let api_key = auth::active_token()
-        .map_err(|e| AetherError::Vault(e.to_string()))?;
+    let api_key = auth::active_token().map_err(|e| AetherError::Vault(e.to_string()))?;
     if api_key.is_none() {
         return Err(AetherError::Other(anyhow::anyhow!(
             "not signed in to Cursor — open the AI sidebar to sign in"
         )));
     }
-    get_ai(&state).await?.create_agent(cwd, model, api_key).await
+    get_ai(&state)
+        .await?
+        .create_agent(cwd, model, api_key)
+        .await
 }
 
 #[tauri::command]
@@ -200,8 +202,8 @@ pub async fn auth_adopt_cli_token() -> AetherResult<bool> {
 
 #[tauri::command]
 pub async fn auth_open_dashboard(app: tauri::AppHandle) -> AetherResult<()> {
-    app.shell()
-        .open("https://cursor.com/dashboard/integrations", None)
+    app.opener()
+        .open_url("https://cursor.com/dashboard/integrations", None::<String>)
         .map_err(|e| AetherError::Other(anyhow::anyhow!(e)))
 }
 

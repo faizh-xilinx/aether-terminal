@@ -27,6 +27,7 @@ type Stage =
 
 export function AuthDialog({ open, onOpenChange }: Props) {
   const auth = useAuth();
+  const refresh = useAuth((s) => s.refresh);
   const [stage, setStage] = useState<Stage>({ kind: "idle" });
   const [token, setToken] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -36,9 +37,9 @@ export function AuthDialog({ open, onOpenChange }: Props) {
       setStage({ kind: "idle" });
       setToken("");
       setError(null);
-      auth.refresh();
+      refresh();
     }
-  }, [open]);
+  }, [open, refresh]);
 
   if (!open) return null;
 

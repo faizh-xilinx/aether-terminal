@@ -27,7 +27,7 @@ impl Handler for ClientHandler {
         server_public_key: &key::PublicKey,
     ) -> Result<bool, Self::Error> {
         let decision = known_hosts::check(&self.host, self.port, server_public_key)
-            .map_err(|e| russh::Error::IO(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+            .map_err(|e| russh::Error::IO(std::io::Error::other(e.to_string())))?;
         match decision {
             HostKeyDecision::Match => Ok(true),
             HostKeyDecision::Mismatch { stored_type } => {
@@ -73,11 +73,7 @@ pub struct SshSession {
 }
 
 impl SshSession {
-    pub async fn connect(
-        app: AppHandle,
-        id: String,
-        opts: SshOpts,
-    ) -> AetherResult<Self> {
+    pub async fn connect(app: AppHandle, id: String, opts: SshOpts) -> AetherResult<Self> {
         let config = Arc::new(Config {
             inactivity_timeout: Some(Duration::from_secs(0)),
             keepalive_interval: Some(Duration::from_secs(30)),
@@ -99,6 +95,7 @@ impl SshSession {
             return Err(AetherError::SshAuth { user: opts.user });
         }
 
+        #[allow(unused_mut)]
         let mut channel = handle
             .channel_open_session()
             .await
@@ -133,7 +130,9 @@ impl SshSession {
             loop {
                 let msg = {
                     let mut guard = channel_read.lock().await;
-                    let Some(ch) = guard.as_mut() else { break; };
+                    let Some(ch) = guard.as_mut() else {
+                        break;
+                    };
                     match ch.wait().await {
                         Some(m) => m,
                         None => break,
@@ -231,4 +230,3 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &SshOpts) -> Aet
 
     Ok(false)
 }
-

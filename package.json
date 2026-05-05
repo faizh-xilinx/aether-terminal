@@ -14,6 +14,8 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "typecheck": "tsc -b --noEmit",
+    "test": "vitest run",
+    "test:all": "npm run test && npm --prefix sidecar run test",
     "sidecar:install": "npm --prefix sidecar install",
     "sidecar:build": "npm --prefix sidecar run build",
     "icons:placeholder": "powershell -ExecutionPolicy Bypass -File ./scripts/generate-placeholder-icon.ps1",
@@ -59,11 +61,14 @@
     "eslint": "^9.17.0",
     "eslint-plugin-react": "^7.37.2",
     "eslint-plugin-react-hooks": "^5.1.0",
+    "globals": "^17.6.0",
     "postcss": "^8.4.49",
     "prettier": "^3.4.2",
     "tailwindcss": "^3.4.16",
     "typescript": "^5.7.2",
-    "vite": "^5.4.11"
+    "typescript-eslint": "^8.59.2",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8"
   },
   "engines": {
     "node": ">=20.0.0"

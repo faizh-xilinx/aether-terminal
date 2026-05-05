@@ -188,13 +188,9 @@ pub fn read_cursor_cli_token() -> anyhow::Result<Option<CliToken>> {
 
 fn find_cursor_cli() -> Option<PathBuf> {
     for cmd in ["cursor-agent", "agent", "cursor-agent.exe", "agent.exe"] {
-        if let Ok(out) = std::process::Command::new(if cfg!(windows) {
-            "where"
-        } else {
-            "which"
-        })
-        .arg(cmd)
-        .output()
+        if let Ok(out) = std::process::Command::new(if cfg!(windows) { "where" } else { "which" })
+            .arg(cmd)
+            .output()
         {
             if out.status.success() {
                 if let Some(line) = String::from_utf8_lossy(&out.stdout).lines().next() {
@@ -213,25 +209,105 @@ fn find_cursor_cli() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn parses_auth_json_field_variants() {
-        let json = r#"{"accessToken":"crsr_abc","email":"me@example.com"}"#;
-        let dir = tempdir();
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("auth.json"), json).unwrap();
-        std::env::set_var("CURSOR_CONFIG_DIR", &dir);
-        let token = read_cursor_cli_token().unwrap().unwrap();
-        std::env::remove_var("CURSOR_CONFIG_DIR");
-        assert_eq!(token.access_token, "crsr_abc");
-        assert_eq!(token.user_email.as_deref(), Some("me@example.com"));
-    }
+    // These tests share `CURSOR_CONFIG_DIR` (a process-global env var) so they
+    // must not run in parallel. We serialise them with a mutex.
+    use std::sync::Mutex;
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn tempdir() -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "aether-auth-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let d = std::env::temp_dir().join(format!("aether-auth-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    fn with_cursor_dir<F: FnOnce()>(json: Option<&str>, f: F) {
+        let _g = ENV_LOCK.lock().unwrap();
+        let dir = tempdir();
+        if let Some(j) = json {
+            std::fs::write(dir.join("auth.json"), j).unwrap();
+        }
+        std::env::set_var("CURSOR_CONFIG_DIR", &dir);
+        let prev_api_key = std::env::var("CURSOR_API_KEY").ok();
+        std::env::remove_var("CURSOR_API_KEY");
+        f();
+        std::env::remove_var("CURSOR_CONFIG_DIR");
+        if let Some(k) = prev_api_key {
+            std::env::set_var("CURSOR_API_KEY", k);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parses_access_token_and_email() {
+        with_cursor_dir(
+            Some(r#"{"accessToken":"crsr_abc","email":"me@example.com"}"#),
+            || {
+                let token = read_cursor_cli_token().unwrap().unwrap();
+                assert_eq!(token.access_token, "crsr_abc");
+                assert_eq!(token.user_email.as_deref(), Some("me@example.com"));
+            },
+        );
+    }
+
+    #[test]
+    fn parses_snake_case_field_variants() {
+        with_cursor_dir(
+            Some(r#"{"access_token":"crsr_xyz","user_email":"u@e.com"}"#),
+            || {
+                let token = read_cursor_cli_token().unwrap().unwrap();
+                assert_eq!(token.access_token, "crsr_xyz");
+                assert_eq!(token.user_email.as_deref(), Some("u@e.com"));
+            },
+        );
+    }
+
+    #[test]
+    fn parses_nested_user_email() {
+        with_cursor_dir(
+            Some(r#"{"apiKey":"crsr_nested","user":{"email":"nested@e.com"}}"#),
+            || {
+                let token = read_cursor_cli_token().unwrap().unwrap();
+                assert_eq!(token.access_token, "crsr_nested");
+                assert_eq!(token.user_email.as_deref(), Some("nested@e.com"));
+            },
+        );
+    }
+
+    #[test]
+    fn missing_auth_json_returns_none() {
+        with_cursor_dir(None, || {
+            assert!(read_cursor_cli_token().unwrap().is_none());
+        });
+    }
+
+    #[test]
+    fn malformed_auth_json_returns_error() {
+        with_cursor_dir(Some("not json at all"), || {
+            assert!(read_cursor_cli_token().is_err());
+        });
+    }
+
+    #[test]
+    fn json_without_token_field_returns_none() {
+        with_cursor_dir(Some(r#"{"foo":"bar"}"#), || {
+            assert!(read_cursor_cli_token().unwrap().is_none());
+        });
+    }
+
+    #[test]
+    fn active_token_priority_falls_back_to_env_var() {
+        // If keyring is empty and there is no auth.json, env var wins.
+        // (We can't reliably stub the keyring in a unit test; we trust that
+        // `vault::get` returns None for an unused key. The keyring step is
+        // exercised in the integration tests.)
+        let _g = ENV_LOCK.lock().unwrap();
+        let dir = tempdir();
+        std::env::set_var("CURSOR_CONFIG_DIR", &dir);
+        std::env::set_var("CURSOR_API_KEY", "env-only-key");
+        let active = active_token().unwrap();
+        std::env::remove_var("CURSOR_CONFIG_DIR");
+        std::env::remove_var("CURSOR_API_KEY");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(active.as_deref(), Some("env-only-key"));
     }
 }

@@ -67,8 +67,10 @@ impl SessionManager {
     pub async fn open_local(&self, opts: LocalOpts) -> AetherResult<String> {
         let id = Uuid::new_v4().to_string();
         let session = LocalSession::spawn(self.app.clone(), id.clone(), opts.clone()).await?;
-        self.sessions
-            .insert(id.clone(), SessionHandle::Local(Arc::new(Mutex::new(session))));
+        self.sessions.insert(
+            id.clone(),
+            SessionHandle::Local(Arc::new(Mutex::new(session))),
+        );
         self.meta.insert(
             id.clone(),
             SessionRecord {
@@ -84,8 +86,10 @@ impl SessionManager {
         let id = Uuid::new_v4().to_string();
         let label = format!("{}@{}:{}", opts.user, opts.host, opts.port);
         let session = SshSession::connect(self.app.clone(), id.clone(), opts).await?;
-        self.sessions
-            .insert(id.clone(), SessionHandle::Ssh(Arc::new(Mutex::new(session))));
+        self.sessions.insert(
+            id.clone(),
+            SessionHandle::Ssh(Arc::new(Mutex::new(session))),
+        );
         self.meta.insert(
             id.clone(),
             SessionRecord {

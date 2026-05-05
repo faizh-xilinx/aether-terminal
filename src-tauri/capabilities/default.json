@@ -17,6 +17,8 @@
     "core:tray:default",
     "dialog:default",
     "fs:default",
+    "opener:default",
+    "opener:allow-open-url",
     "os:default",
     "shell:default"
   ]

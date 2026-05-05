@@ -1,0 +1,24 @@
+# Aether SSH config integration fixture.
+# Mirrors the messy reality of a developer's ~/.ssh/config.
+
+Host *
+    ServerAliveInterval 30
+    ForwardAgent yes
+
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_ed25519
+
+# multi-alias entry
+Host prod-jump prod
+    HostName 10.0.42.7
+    User ops
+    Port 2200
+    IdentityFile ~/.ssh/keys/prod_ed25519
+
+Host staging
+    HostName staging.example.com
+    User deploy
+    # comment between options
+    Port 22
