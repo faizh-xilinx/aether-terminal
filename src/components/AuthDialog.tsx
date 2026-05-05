@@ -118,22 +118,15 @@ export function AuthDialog({ open, onOpenChange }: Props) {
     setError(null);
     setStage({ kind: "validating" });
     try {
+      // Save first. We deliberately do not round-trip through the SDK
+      // here: a transient error (network, sidecar warmup, rate limit) at
+      // this exact moment would have us forget a perfectly valid key and
+      // make sign-in feel broken. Format validation above is enough to
+      // reject obvious mistakes; if the key is wrong, the *first* AI
+      // request will fail with a clear, actionable message and the
+      // sidebar's red error chip already offers a one-click "open
+      // dashboard & paste" flow.
       await auth.saveToken(trimmed);
-      // Real validation: ask the sidecar to spawn an agent with this key.
-      // ai_create_agent calls @cursor/sdk's Agent.create, so a bad key
-      // surfaces here before we leave the dialog.
-      try {
-        await ipc.aiCreateAgent();
-      } catch (createErr) {
-        await auth.forget();
-        const msg =
-          typeof createErr === "string" ? createErr : String(createErr);
-        throw new Error(
-          msg.includes("Error")
-            ? "Cursor rejected this key. Double-check you copied the full value from the dashboard."
-            : msg
-        );
-      }
       onOpenChange(false);
     } catch (e) {
       setError(String(e));

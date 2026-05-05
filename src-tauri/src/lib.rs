@@ -3,6 +3,7 @@ mod auth;
 mod commands;
 mod error;
 mod known_hosts;
+mod secrets;
 mod session;
 mod ssh_config;
 mod vault;
@@ -40,6 +41,19 @@ pub fn run() {
             let handle = app.handle().clone();
             let sessions = Arc::new(SessionManager::new(handle.clone()));
             let sidecar_dir = sidecar_dir(&handle);
+
+            // Hydrate the in-process token cache from the encrypted
+            // session file before any UI code runs. If the keyring
+            // backend is unreliable on this Windows install, this is the
+            // only path that gives us cross-launch persistence.
+            match auth::hydrate_from_disk() {
+                Ok(true) => {
+                    tracing::info!("loaded persisted Cursor session from session.bin")
+                }
+                Ok(false) => {}
+                Err(e) => tracing::warn!(error = %e, "failed to read session.bin"),
+            }
+
             app.manage(AppState {
                 sessions,
                 ai: Arc::new(OnceCell::new()),

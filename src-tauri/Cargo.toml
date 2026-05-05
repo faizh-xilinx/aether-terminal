@@ -1,6 +1,6 @@
 [package]
 name = "aether"
-version = "0.1.0"
+version = "0.1.1"
 description = "The AI-native SSH terminal."
 authors = ["Aether contributors"]
 license = "MIT"
@@ -64,6 +64,18 @@ shellexpand = "3"
 # Channels / sync
 parking_lot = "0.12"
 dashmap = "6"
+
+# DPAPI for cross-launch token persistence on Windows. The keyring crate's
+# Credential Manager backend is intermittently flaky in non-interactive
+# processes (documented in vault::tests::keyring_round_trip); we encrypt the
+# token blob with the user's data-protection key and stash it in
+# %APPDATA%\Aether\session.bin as a deterministic backup.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_System_Memory",
+] }
 
 [features]
 default = ["custom-protocol"]

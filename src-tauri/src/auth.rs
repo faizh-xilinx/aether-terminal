@@ -25,6 +25,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
+use crate::secrets;
 use crate::vault;
 
 const VAULT_KEY: &str = "cursor-token";
@@ -158,14 +159,19 @@ pub fn save_token(token: &str) -> anyhow::Result<()> {
     if trimmed.is_empty() {
         anyhow::bail!("empty token");
     }
-    // Cache is always written first — that's our authoritative source for
-    // this process. Keyring is a best-effort persistence layer; if it
-    // happens to be flaky on this Windows session we just lose
-    // cross-launch persistence (the user re-pastes once on next start),
-    // not the current session.
+    // 1. Cache (in-process, instant) — authoritative for this run.
     cache_set(Some(trimmed.to_string()));
+    // 2. OS keyring (best-effort) — works on macOS / most Linux GUIs and
+    //    on Windows when Credential Manager cooperates.
     if let Err(e) = vault::set(VAULT_KEY, trimmed) {
-        tracing::warn!(error = %e, "keyring write failed, token kept in memory only");
+        tracing::warn!(error = %e, "keyring write failed, falling back to encrypted file");
+    }
+    // 3. DPAPI-encrypted session.bin — deterministic Windows persistence;
+    //    a no-op on other platforms. Even when the keyring drops the
+    //    secret, this lets the next Aether launch hydrate the cache
+    //    transparently.
+    if let Err(e) = secrets::store(trimmed) {
+        tracing::warn!(error = %e, "encrypted session file write failed");
     }
     Ok(())
 }
@@ -175,7 +181,28 @@ pub fn forget_token() -> anyhow::Result<()> {
     if let Err(e) = vault::delete(VAULT_KEY) {
         tracing::warn!(error = %e, "keyring delete failed (cache already cleared)");
     }
+    if let Err(e) = secrets::forget() {
+        tracing::warn!(error = %e, "could not delete encrypted session file");
+    }
     Ok(())
+}
+
+/// Pulls any persisted token off disk and into the in-process cache.
+/// Returns `Ok(true)` if a token was loaded, `Ok(false)` if no stored
+/// session exists. Called once during Tauri's setup hook.
+pub fn hydrate_from_disk() -> anyhow::Result<bool> {
+    if cache_get().is_some() {
+        return Ok(true);
+    }
+    if let Some(t) = secrets::load()? {
+        cache_set(Some(t));
+        return Ok(true);
+    }
+    if let Some(t) = vault::get(VAULT_KEY).ok().flatten() {
+        cache_set(Some(t));
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 /// Spawn the `cursor-agent login` browser flow and wait for it to exit. Does

@@ -1,7 +1,7 @@
 {
   "name": "aether-sidecar",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Node sidecar that hosts @cursor/sdk for Aether.",
   "type": "module",
   "main": "dist/index.js",

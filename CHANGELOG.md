@@ -4,6 +4,44 @@ All notable changes to Aether are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] — 2026-05-05
+
+Cursor sign-in is now durable across launches. The 0.1.0 release
+already had the in-memory cache so a freshly-pasted key worked for the
+session, but the OS keyring backend on Windows would intermittently
+fail to read back its own writes — meaning users had to re-paste the
+API key every time they relaunched Aether. 0.1.1 closes that gap.
+
+### Fixed
+- **Cross-launch token persistence** via DPAPI-encrypted session file
+  at `%APPDATA%\Aether\session.bin`. Saved on every successful sign-in
+  alongside the keyring, decrypted on startup before any UI mounts.
+  Decryptable only by the same Windows user account on the same
+  machine. On non-Windows targets the new module is a no-op (we still
+  use keyring there because it actually works).
+- **Paste-form false rejections.** The 0.1.0 dialog called
+  `aiCreateAgent` to validate the key before saving; a transient
+  network or SDK warmup failure would forget a perfectly valid key
+  there. The check is now format-only (`crsr_…`); the first real AI
+  request surfaces auth errors with a one-click recovery button, so
+  no UX is lost.
+
+### Added
+- `secrets` module: `store` / `load` / `forget` wrappers around
+  `CryptProtectData` / `CryptUnprotectData`. Memory ownership is
+  carefully handled — every successful encrypt/decrypt frees the
+  LocalAlloc'd buffer Windows hands back, so the new code is leak-free.
+- `hydrate_from_disk()` in `auth.rs`, called from Tauri's `setup` hook,
+  walks cache → encrypted file → keyring and seeds the in-process cache
+  before the renderer asks for status.
+- New round-trip test (`secrets::tests::round_trip_real_dpapi`,
+  Windows-only) that backs up any pre-existing session, tests
+  encrypt/decrypt/forget, and restores prior state on exit.
+
+### Changed
+- Bumped to 0.1.1 across `package.json`, `src-tauri/Cargo.toml`,
+  `tauri.conf.json`, and `sidecar/package.json`.
+
 ## [0.1.0] — 2026-05-05
 
 First public alpha. The full vertical slice — terminal, SSH, AI, splits —
