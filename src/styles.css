@@ -1,0 +1,123 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Midnight (default dark) — calibrated against Tabby/Warp benchmarks */
+    --ae-bg: 13 16 22;
+    --ae-bg-subtle: 19 23 31;
+    --ae-bg-elevated: 26 31 42;
+    --ae-fg: 234 238 246;
+    --ae-fg-muted: 162 170 188;
+    --ae-fg-subtle: 110 119 138;
+    --ae-accent: 124 154 255;
+    --ae-accent-fg: 7 11 18;
+    --ae-border: 35 41 55;
+    --ae-border-strong: 56 65 84;
+    --ae-success: 80 200 130;
+    --ae-warn: 240 180 80;
+    --ae-danger: 240 100 110;
+  }
+
+  html, body, #root {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    @apply bg-bg text-fg font-sans antialiased;
+    color-scheme: dark;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .aether-body {
+    background: radial-gradient(
+        circle at 20% -10%,
+        rgb(var(--ae-accent) / 0.07) 0%,
+        transparent 40%
+      ),
+      radial-gradient(
+        circle at 90% 110%,
+        rgb(var(--ae-accent) / 0.05) 0%,
+        transparent 40%
+      ),
+      rgb(var(--ae-bg));
+  }
+
+  *::selection {
+    background: rgb(var(--ae-accent) / 0.35);
+    color: rgb(var(--ae-fg));
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: rgb(var(--ae-border-strong));
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--ae-fg-subtle));
+    background-clip: content-box;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer components {
+  .glass {
+    @apply bg-bg-elevated/70 backdrop-blur-xl border border-border;
+  }
+
+  .pill {
+    @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px]
+           font-medium tracking-wide bg-bg-subtle text-fg-muted border border-border;
+  }
+
+  .kbd {
+    @apply inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5
+           rounded-md text-[10px] font-mono font-medium
+           bg-bg-subtle text-fg-muted border border-border;
+  }
+
+  .btn {
+    @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm
+           bg-bg-subtle hover:bg-bg-elevated text-fg border border-border
+           transition-colors duration-100 outline-none
+           focus-visible:ring-2 focus-visible:ring-accent/50;
+  }
+
+  .btn-primary {
+    @apply btn bg-accent/15 hover:bg-accent/25 border-accent/30 text-fg;
+  }
+
+  .input {
+    @apply w-full px-3 py-2 rounded-md bg-bg-subtle border border-border
+           text-fg placeholder:text-fg-subtle outline-none
+           focus:border-accent/60 focus:ring-2 focus:ring-accent/20
+           transition-colors;
+  }
+}
+
+/* xterm overrides — tighter, modern look */
+.xterm {
+  padding: 12px 16px;
+  height: 100%;
+}
+
+.xterm .xterm-viewport {
+  background-color: transparent !important;
+}
+
+.xterm .xterm-screen canvas {
+  image-rendering: pixelated;
+}

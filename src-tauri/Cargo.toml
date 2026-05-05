@@ -1,0 +1,79 @@
+[package]
+name = "aether"
+version = "0.1.0"
+description = "The AI-native SSH terminal."
+authors = ["Aether contributors"]
+license = "MIT"
+repository = ""
+edition = "2021"
+rust-version = "1.80"
+
+[lib]
+name = "aether_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri core + plugins
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-os = "2"
+tauri-plugin-shell = "2"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+futures = "0.3"
+async-trait = "0.1"
+bytes = "1"
+
+# Serde
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Errors / logging
+thiserror = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# IDs / paths / time
+uuid = { version = "1", features = ["v4", "serde"] }
+dirs = "5"
+chrono = { version = "0.4", features = ["serde"] }
+
+# PTY (cross-platform; uses ConPTY on Windows)
+portable-pty = "0.8"
+
+# SSH
+russh = "0.46"
+russh-keys = "0.46"
+
+# Credential vault (Windows DPAPI / macOS Keychain / libsecret)
+keyring = "3"
+
+# Config / parsing
+ssh2-config = "0.5"
+shellexpand = "3"
+
+# Channels / sync
+parking_lot = "0.12"
+dashmap = "6"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.dev]
+incremental = true
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
