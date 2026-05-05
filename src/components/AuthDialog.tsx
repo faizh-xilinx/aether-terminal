@@ -81,7 +81,12 @@ export function AuthDialog({ open, onOpenChange }: Props) {
       await auth.refresh();
       setStage({ kind: "idle" });
     } catch (e) {
-      setError(`Install failed: ${e}. You can install manually with: npm install -g cursor-agent`);
+      const msg = String(e);
+      const manual =
+        navigator.platform.toLowerCase().includes("win")
+          ? "irm 'https://cursor.com/install?win32=true' | iex"
+          : "curl -fsS https://cursor.com/install | bash";
+      setError(`${msg}\n\nYou can install manually with:\n  ${manual}`);
       setStage({ kind: "idle" });
     }
   };

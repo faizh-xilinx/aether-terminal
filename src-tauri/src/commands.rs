@@ -207,21 +207,52 @@ pub async fn auth_open_dashboard(app: tauri::AppHandle) -> AetherResult<()> {
         .map_err(|e| AetherError::Other(anyhow::anyhow!(e)))
 }
 
-/// Best-effort install of the cursor-agent CLI via npm. Returns the path on
-/// success.
+/// Best-effort install of the official Cursor CLI. Cursor publishes it as a
+/// download/install script (not as an npm package), so we run the same
+/// command users would run in their shell.
 #[tauri::command]
 pub async fn auth_install_cli() -> AetherResult<String> {
     use tokio::process::Command;
-    let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
-    let status = Command::new(npm)
-        .args(["install", "-g", "cursor-agent"])
-        .status()
-        .await
-        .map_err(|e| AetherError::Other(anyhow::anyhow!("spawn npm: {e}")))?;
-    if !status.success() {
+
+    let output = if cfg!(windows) {
+        Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "irm 'https://cursor.com/install?win32=true' | iex",
+            ])
+            .output()
+            .await
+    } else {
+        Command::new("sh")
+            .args(["-c", "curl -fsS https://cursor.com/install | bash"])
+            .output()
+            .await
+    };
+
+    let output = output.map_err(|e| {
+        AetherError::Other(anyhow::anyhow!("spawn installer shell: {e}"))
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         return Err(AetherError::Other(anyhow::anyhow!(
-            "npm install -g cursor-agent failed"
+            "Cursor CLI install failed (exit {}): {}",
+            output.status.code().unwrap_or(-1),
+            if stderr.is_empty() { &stdout } else { &stderr }
         )));
     }
-    Ok("installed".into())
+
+    // The install script lays the binary down at `~/.local/bin/agent` (Unix)
+    // or `%LOCALAPPDATA%\Programs\cursor-cli\agent.exe` (Windows). Re-detect.
+    match auth::find_cursor_cli_public() {
+        Some(path) => Ok(path.display().to_string()),
+        None => Ok(
+            "installed (binary not yet on PATH — restart Aether or your shell)"
+                .into(),
+        ),
+    }
 }

@@ -202,7 +202,37 @@ fn find_cursor_cli() -> Option<PathBuf> {
             }
         }
     }
+
+    // Fall back to the well-known install locations the official installer
+    // writes to. PATH may not have been refreshed in Aether's process yet.
+    if let Some(home) = dirs::home_dir() {
+        let unix = home.join(".local").join("bin").join("agent");
+        if unix.exists() {
+            return Some(unix);
+        }
+    }
+    if cfg!(windows) {
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            for sub in [
+                "cursor-agent\\bin\\agent.exe",
+                "Programs\\cursor-cli\\agent.exe",
+                "Programs\\cursor-agent\\agent.exe",
+            ] {
+                let p = std::path::Path::new(&local).join(sub);
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
     None
+}
+
+/// Public re-export so command handlers can use the same detection as
+/// `status()`.
+pub fn find_cursor_cli_public() -> Option<PathBuf> {
+    find_cursor_cli()
 }
 
 #[cfg(test)]

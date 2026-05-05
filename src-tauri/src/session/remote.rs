@@ -75,7 +75,9 @@ pub struct SshSession {
 impl SshSession {
     pub async fn connect(app: AppHandle, id: String, opts: SshOpts) -> AetherResult<Self> {
         let config = Arc::new(Config {
-            inactivity_timeout: Some(Duration::from_secs(0)),
+            // No inactivity timeout — interactive shells stay open.
+            // 30 s keepalive matches OpenSSH ServerAliveInterval default.
+            inactivity_timeout: None,
             keepalive_interval: Some(Duration::from_secs(30)),
             ..Default::default()
         });
@@ -85,15 +87,20 @@ impl SshSession {
             port: opts.port,
             trust_unknown: opts.trust_unknown_host_key,
         };
+        tracing::info!(
+            host = %opts.host,
+            port = opts.port,
+            user = %opts.user,
+            "establishing SSH connection"
+        );
         #[allow(unused_mut)]
         let mut handle = russh::client::connect(config, (opts.host.as_str(), opts.port), handler)
             .await
             .map_err(|e| AetherError::Ssh(format!("connect failed: {e}")))?;
 
-        let authed = authenticate(&mut handle, &opts).await?;
-        if !authed {
-            return Err(AetherError::SshAuth { user: opts.user });
-        }
+        // `authenticate` returns Err with a rich message on failure, so the
+        // success path is the only `Ok` branch we care about here.
+        authenticate(&mut handle, &opts).await?;
 
         #[allow(unused_mut)]
         let mut channel = handle
@@ -206,27 +213,94 @@ impl SshSession {
     }
 }
 
-async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &SshOpts) -> AetherResult<bool> {
+async fn authenticate(
+    handle: &mut Handle<ClientHandler>,
+    opts: &SshOpts,
+) -> AetherResult<bool> {
+    let mut tried: Vec<String> = Vec::new();
+
+    // 1. Explicit private key file from the connect dialog or ssh_config.
     if let Some(path) = opts.private_key_path.as_ref() {
-        let path = shellexpand::tilde(path).to_string();
-        let key = match opts.private_key_passphrase.as_deref() {
-            Some(pass) if !pass.is_empty() => load_secret_key(&path, Some(pass))?,
-            _ => load_secret_key(&path, None)?,
-        };
-        let r = handle
-            .authenticate_publickey(opts.user.clone(), Arc::new(key))
-            .await?;
-        if r {
-            return Ok(true);
+        let expanded = shellexpand::tilde(path).to_string();
+        match load_secret_key(&expanded, opts.private_key_passphrase.as_deref()) {
+            Ok(key) => {
+                tried.push(format!("publickey({path})"));
+                tracing::info!(host = %opts.host, key = %path, "trying explicit publickey");
+                if handle
+                    .authenticate_publickey(opts.user.clone(), Arc::new(key))
+                    .await?
+                {
+                    return Ok(true);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(key = %path, error = %e, "failed to load explicit private key");
+                tried.push(format!("publickey({path}: load failed: {e})"));
+            }
         }
     }
 
+    // 2. Default keys in ~/.ssh — the typical interactive case.
+    if let Some(home) = dirs::home_dir() {
+        for fname in ["id_ed25519", "id_ecdsa", "id_rsa"] {
+            let path = home.join(".ssh").join(fname);
+            if !path.exists() {
+                continue;
+            }
+            // Skip if we just tried this same file as the explicit key.
+            if let Some(explicit) = opts.private_key_path.as_ref() {
+                let exp = shellexpand::tilde(explicit).to_string();
+                if std::path::Path::new(&exp) == path {
+                    continue;
+                }
+            }
+            match load_secret_key(&path, opts.private_key_passphrase.as_deref()) {
+                Ok(key) => {
+                    tried.push(format!("publickey({})", path.display()));
+                    tracing::info!(host = %opts.host, key = %path.display(), "trying default publickey");
+                    if handle
+                        .authenticate_publickey(opts.user.clone(), Arc::new(key))
+                        .await?
+                    {
+                        return Ok(true);
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(key = %path.display(), error = %e, "default key load failed");
+                }
+            }
+        }
+    }
+
+    // 3. Password (only attempted if explicitly provided via the dialog).
     if let Some(pw) = opts.password.as_ref() {
-        let r = handle.authenticate_password(opts.user.clone(), pw).await?;
-        if r {
+        tried.push("password".into());
+        tracing::info!(host = %opts.host, "trying password auth");
+        if handle
+            .authenticate_password(opts.user.clone(), pw)
+            .await?
+        {
             return Ok(true);
         }
     }
 
-    Ok(false)
+    tracing::error!(
+        host = %opts.host,
+        user = %opts.user,
+        port = opts.port,
+        attempts = ?tried,
+        "all SSH auth methods exhausted"
+    );
+
+    Err(AetherError::Ssh(format!(
+        "authentication failed for {}@{}:{} (tried: {})",
+        opts.user,
+        opts.host,
+        opts.port,
+        if tried.is_empty() {
+            "no methods — provide a key path or password".to_string()
+        } else {
+            tried.join(", ")
+        }
+    )))
 }
