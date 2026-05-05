@@ -1,16 +1,28 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use russh::client::{Config, Handle, Handler, Msg};
+use russh::client::{Config, Handle, Handler};
 use russh::keys::{key, load_secret_key};
-use russh::{Channel, ChannelMsg, Disconnect};
+use russh::{ChannelMsg, Disconnect};
 use tauri::AppHandle;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 
 use crate::error::{AetherError, AetherResult};
 use crate::known_hosts::{self, HostKeyDecision};
 use crate::session::manager::{SessionManager, SshOpts};
+
+/// Operations the I/O task can perform on the channel. Sent over an mpsc so
+/// the task that owns the channel is the only one calling `data()`,
+/// `window_change()`, etc. — keeping reads and writes serialised without a
+/// mutex around the channel itself (which would deadlock against
+/// `Channel::wait().await`).
+enum ChannelOp {
+    Data(Vec<u8>),
+    Resize { cols: u16, rows: u16 },
+    Close,
+}
 
 struct ClientHandler {
     host: String,
@@ -67,9 +79,9 @@ impl Handler for ClientHandler {
 pub struct SshSession {
     id: String,
     handle: Arc<Mutex<Handle<ClientHandler>>>,
-    channel: Arc<Mutex<Option<Channel<Msg>>>>,
+    ops_tx: mpsc::Sender<ChannelOp>,
     _runner: tokio::task::JoinHandle<()>,
-    closed: Arc<Mutex<bool>>,
+    closed: Arc<AtomicBool>,
 }
 
 impl SshSession {
@@ -131,42 +143,63 @@ impl SshSession {
             .await
             .map_err(|e| AetherError::Ssh(format!("request_shell: {e}")))?;
 
-        let channel_arc = Arc::new(Mutex::new(Some(channel)));
-        let closed = Arc::new(Mutex::new(false));
+        // Channel I/O task: owns the channel exclusively, multiplexes
+        // server-pushed messages and outbound write/resize/close ops via
+        // tokio::select!. This is the canonical russh pattern; trying to
+        // protect the channel with a mutex deadlocks because
+        // `channel.wait().await` holds its receive side indefinitely.
+        let (ops_tx, mut ops_rx) = mpsc::channel::<ChannelOp>(64);
+        let closed = Arc::new(AtomicBool::new(false));
+        let app_for_runner = app.clone();
+        let id_for_runner = id.clone();
+        let closed_for_runner = closed.clone();
 
-        let app_read = app.clone();
-        let id_read = id.clone();
-        let channel_read = channel_arc.clone();
-        let closed_read = closed.clone();
         let runner = tokio::spawn(async move {
+            let mut channel = channel;
             loop {
-                let msg = {
-                    let mut guard = channel_read.lock().await;
-                    let Some(ch) = guard.as_mut() else {
-                        break;
-                    };
-                    match ch.wait().await {
-                        Some(m) => m,
-                        None => break,
+                tokio::select! {
+                    msg = channel.wait() => {
+                        match msg {
+                            Some(ChannelMsg::Data { ref data }) => {
+                                SessionManager::emit_data(&app_for_runner, &id_for_runner, data);
+                            }
+                            Some(ChannelMsg::ExtendedData { ref data, .. }) => {
+                                SessionManager::emit_data(&app_for_runner, &id_for_runner, data);
+                            }
+                            Some(ChannelMsg::ExitStatus { exit_status }) => {
+                                closed_for_runner.store(true, Ordering::SeqCst);
+                                SessionManager::emit_exit(&app_for_runner, &id_for_runner, exit_status as i32);
+                            }
+                            Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
+                                closed_for_runner.store(true, Ordering::SeqCst);
+                                SessionManager::emit_exit(&app_for_runner, &id_for_runner, 0);
+                                break;
+                            }
+                            _ => {}
+                        }
                     }
-                };
-                match msg {
-                    ChannelMsg::Data { ref data } => {
-                        SessionManager::emit_data(&app_read, &id_read, data);
+                    op = ops_rx.recv() => {
+                        match op {
+                            Some(ChannelOp::Data(data)) => {
+                                if let Err(e) = channel.data(&data[..]).await {
+                                    tracing::warn!(error = %e, "ssh channel.data failed");
+                                }
+                            }
+                            Some(ChannelOp::Resize { cols, rows }) => {
+                                if let Err(e) = channel
+                                    .window_change(cols as u32, rows as u32, 0, 0)
+                                    .await
+                                {
+                                    tracing::warn!(error = %e, "ssh window_change failed");
+                                }
+                            }
+                            Some(ChannelOp::Close) | None => {
+                                let _ = channel.close().await;
+                                closed_for_runner.store(true, Ordering::SeqCst);
+                                break;
+                            }
+                        }
                     }
-                    ChannelMsg::ExtendedData { ref data, .. } => {
-                        SessionManager::emit_data(&app_read, &id_read, data);
-                    }
-                    ChannelMsg::ExitStatus { exit_status } => {
-                        *closed_read.lock().await = true;
-                        SessionManager::emit_exit(&app_read, &id_read, exit_status as i32);
-                    }
-                    ChannelMsg::Eof | ChannelMsg::Close => {
-                        *closed_read.lock().await = true;
-                        SessionManager::emit_exit(&app_read, &id_read, 0);
-                        break;
-                    }
-                    _ => {}
                 }
             }
         });
@@ -174,40 +207,36 @@ impl SshSession {
         Ok(Self {
             id,
             handle: Arc::new(Mutex::new(handle)),
-            channel: channel_arc,
+            ops_tx,
             _runner: runner,
             closed,
         })
     }
 
     pub async fn write(&mut self, data: &[u8]) -> AetherResult<()> {
-        if *self.closed.lock().await {
+        if self.closed.load(Ordering::SeqCst) {
             return Err(AetherError::SessionNotFound(self.id.clone()));
         }
-        let mut guard = self.channel.lock().await;
-        let ch = guard
-            .as_mut()
-            .ok_or_else(|| AetherError::Ssh("channel closed".into()))?;
-        ch.data(data)
+        self.ops_tx
+            .send(ChannelOp::Data(data.to_vec()))
             .await
-            .map_err(|e| AetherError::Ssh(format!("write: {e}")))
+            .map_err(|_| AetherError::Ssh("ssh i/o task is no longer running".into()))
     }
 
     pub async fn resize(&mut self, cols: u16, rows: u16) -> AetherResult<()> {
-        let mut guard = self.channel.lock().await;
-        let ch = guard
-            .as_mut()
-            .ok_or_else(|| AetherError::Ssh("channel closed".into()))?;
-        ch.window_change(cols as u32, rows as u32, 0, 0)
+        if self.closed.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        self.ops_tx
+            .send(ChannelOp::Resize { cols, rows })
             .await
-            .map_err(|e| AetherError::Ssh(format!("resize: {e}")))
+            .map_err(|_| AetherError::Ssh("ssh i/o task is no longer running".into()))
     }
 
     pub async fn close(&mut self) -> AetherResult<()> {
-        *self.closed.lock().await = true;
-        if let Some(ch) = self.channel.lock().await.take() {
-            let _ = ch.close().await;
-        }
+        self.closed.store(true, Ordering::SeqCst);
+        // Best-effort signal to the runner; ignore errors if the task is gone.
+        let _ = self.ops_tx.send(ChannelOp::Close).await;
         let _ = self
             .handle
             .lock()

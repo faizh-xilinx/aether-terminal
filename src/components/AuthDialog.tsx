@@ -156,7 +156,13 @@ export function AuthDialog({ open, onOpenChange }: Props) {
           {stage.kind === "validating" && <Status>Validating your token…</Status>}
 
           {stage.kind === "installing-cli" && (
-            <Status>Installing the official Cursor CLI via npm…</Status>
+            <Status>
+              Downloading and installing the Cursor CLI from cursor.com…
+              <br />
+              <span className="text-fg-subtle text-[11px]">
+                This usually takes 20–60 seconds.
+              </span>
+            </Status>
           )}
 
           {stage.kind === "idle" && !auth.status?.authenticated && (
@@ -293,9 +299,9 @@ function sourceLabel(source: string): string {
 
 function Status({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-2 px-3 py-3 rounded-md bg-bg-subtle border border-border text-[13px] text-fg-muted">
-      <Loader2 className="h-3.5 w-3.5 animate-spin text-accent shrink-0" />
-      {children}
+    <div className="flex items-start gap-2 px-3 py-3 rounded-md bg-bg-subtle border border-border text-[13px] text-fg-muted">
+      <Loader2 className="h-3.5 w-3.5 mt-0.5 animate-spin text-accent shrink-0" />
+      <div className="flex-1">{children}</div>
     </div>
   );
 }

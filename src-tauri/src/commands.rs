@@ -207,52 +207,93 @@ pub async fn auth_open_dashboard(app: tauri::AppHandle) -> AetherResult<()> {
         .map_err(|e| AetherError::Other(anyhow::anyhow!(e)))
 }
 
-/// Best-effort install of the official Cursor CLI. Cursor publishes it as a
-/// download/install script (not as an npm package), so we run the same
-/// command users would run in their shell.
+/// Spawns the official Cursor CLI installer in a *visible* shell window the
+/// user can watch, and polls for the binary's appearance with a timeout.
+///
+/// We deliberately do NOT capture stdout/stderr through pipes here, because
+/// `Invoke-RestMethod`'s download progress can stall a piped stdout for many
+/// seconds — making `Command::output()` look indistinguishable from a hang.
+/// Instead we rely on the well-known install destination (which we discovered
+/// by reading the live install script) and poll for it.
 #[tauri::command]
 pub async fn auth_install_cli() -> AetherResult<String> {
+    use std::time::Duration;
     use tokio::process::Command;
+    use tokio::time::sleep;
 
-    let output = if cfg!(windows) {
-        Command::new("powershell.exe")
+    // Where the official installer drops the binary. Polling for its
+    // appearance is dramatically more reliable than waiting on the script's
+    // overall exit, because the script does post-install bookkeeping that
+    // may extend beyond the moment the binary is usable.
+    let target = if cfg!(windows) {
+        std::env::var("LOCALAPPDATA")
+            .map(|p| std::path::PathBuf::from(p).join("cursor-agent").join("agent.exe"))
+            .map_err(|_| AetherError::Other(anyhow::anyhow!("LOCALAPPDATA not set")))?
+    } else {
+        dirs::home_dir()
+            .ok_or_else(|| AetherError::Other(anyhow::anyhow!("no home dir")))?
+            .join(".local")
+            .join("bin")
+            .join("agent")
+    };
+
+    // Spawn the installer in a fresh PowerShell window so the user sees real
+    // download progress and any error messages. `start` is a cmd.exe builtin.
+    let spawn_result = if cfg!(windows) {
+        Command::new("cmd.exe")
             .args([
+                "/c",
+                "start",
+                "Aether — installing Cursor CLI",
+                "powershell.exe",
                 "-NoProfile",
                 "-ExecutionPolicy",
                 "Bypass",
                 "-Command",
-                "irm 'https://cursor.com/install?win32=true' | iex",
+                "Write-Host 'Aether is installing the Cursor CLI...'; Write-Host ''; \
+                 try { irm 'https://cursor.com/install?win32=true' | iex; \
+                       Write-Host ''; Write-Host 'Done. You can close this window.' -ForegroundColor Green } \
+                 catch { Write-Host ''; Write-Host \"Install failed: $_\" -ForegroundColor Red; \
+                         Write-Host 'Press any key to close.'; \
+                         [void][System.Console]::ReadKey($true) }",
             ])
-            .output()
-            .await
+            .spawn()
     } else {
         Command::new("sh")
-            .args(["-c", "curl -fsS https://cursor.com/install | bash"])
-            .output()
-            .await
+            .args([
+                "-c",
+                "curl -fsS https://cursor.com/install | bash",
+            ])
+            .spawn()
     };
 
-    let output = output.map_err(|e| {
-        AetherError::Other(anyhow::anyhow!("spawn installer shell: {e}"))
+    spawn_result.map_err(|e| {
+        AetherError::Other(anyhow::anyhow!("could not start installer shell: {e}"))
     })?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        return Err(AetherError::Other(anyhow::anyhow!(
-            "Cursor CLI install failed (exit {}): {}",
-            output.status.code().unwrap_or(-1),
-            if stderr.is_empty() { &stdout } else { &stderr }
-        )));
+    // Poll for the binary up to 5 minutes. The official installer ships a
+    // ~30 MB zip and most users will see it appear within 60 s.
+    let deadline = std::time::Instant::now() + Duration::from_secs(300);
+    let mut last_log = std::time::Instant::now();
+    while std::time::Instant::now() < deadline {
+        if target.exists() {
+            tracing::info!(path = %target.display(), "cursor CLI installed");
+            return Ok(target.display().to_string());
+        }
+        if let Some(found) = auth::find_cursor_cli_public() {
+            tracing::info!(path = %found.display(), "cursor CLI detected");
+            return Ok(found.display().to_string());
+        }
+        if last_log.elapsed() >= Duration::from_secs(15) {
+            tracing::info!("still waiting for cursor-agent install...");
+            last_log = std::time::Instant::now();
+        }
+        sleep(Duration::from_millis(750)).await;
     }
 
-    // The install script lays the binary down at `~/.local/bin/agent` (Unix)
-    // or `%LOCALAPPDATA%\Programs\cursor-cli\agent.exe` (Windows). Re-detect.
-    match auth::find_cursor_cli_public() {
-        Some(path) => Ok(path.display().to_string()),
-        None => Ok(
-            "installed (binary not yet on PATH — restart Aether or your shell)"
-                .into(),
-        ),
-    }
+    Err(AetherError::Other(anyhow::anyhow!(
+        "Cursor CLI install did not complete within 5 minutes. \
+         Check the installer window for an error, or run this manually:\n\n  \
+         irm 'https://cursor.com/install?win32=true' | iex"
+    )))
 }
