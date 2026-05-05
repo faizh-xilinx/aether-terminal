@@ -4,6 +4,62 @@ import { logger } from "./logger.js";
 
 type AgentInstance = SDKAgent;
 
+/**
+ * Push a non-RPC event to the parent on stdout. The Rust side's reader
+ * looks for the `event` field and re-emits it as a Tauri event named
+ * `ai:<kind>` carrying this payload, so the frontend can `listen` for it.
+ */
+function emitEvent(kind: string, payload: Record<string, unknown>): void {
+  const frame = JSON.stringify({ event: kind, payload });
+  process.stdout.write(frame + "\n");
+}
+
+/**
+ * Translate one element of the SDK's streamed event sequence into the
+ * minimal shape the UI needs. The SDK exposes a wide event taxonomy
+ * (text, thinking, tool_use, tool_result, system, etc.); we focus on
+ * the ones a chat-style UI actually renders. Extra event types fall
+ * through silently rather than spamming the renderer.
+ */
+function forwardStreamEvent(runId: string, event: unknown): void {
+  if (!event || typeof event !== "object") return;
+  const ev = event as Record<string, unknown>;
+  const type = typeof ev.type === "string" ? ev.type : "";
+
+  if (type === "assistant") {
+    const message = ev.message as { content?: unknown } | undefined;
+    const blocks = Array.isArray(message?.content) ? message.content : [];
+    for (const block of blocks) {
+      if (
+        block &&
+        typeof block === "object" &&
+        (block as { type?: string }).type === "text"
+      ) {
+        const text = (block as { text?: string }).text;
+        if (typeof text === "string" && text.length > 0) {
+          emitEvent("ai:text", { runId, text });
+        }
+      } else if (
+        block &&
+        typeof block === "object" &&
+        (block as { type?: string }).type === "tool_use"
+      ) {
+        const name = (block as { name?: string }).name ?? "tool";
+        emitEvent("ai:tool", { runId, name });
+      }
+    }
+  } else if (type === "thinking") {
+    const message = ev.message as { text?: string } | undefined;
+    if (message?.text) emitEvent("ai:thinking", { runId, text: message.text });
+  } else if (type === "tool_use") {
+    const name = (ev as { name?: string }).name ?? "tool";
+    emitEvent("ai:tool", { runId, name });
+  } else if (type === "result") {
+    // Final aggregate sent by some SDK versions; we already get this via
+    // run.wait() so suppress to avoid double-rendering.
+  }
+}
+
 interface RpcRequest {
   id: string | number;
   method: string;
@@ -58,12 +114,44 @@ export async function handleRequest(payload: unknown): Promise<RpcResponse | nul
         const agentId = String(payload.params?.agentId ?? "");
         const prompt = String(payload.params?.prompt ?? "");
         const agent = agents.get(agentId);
-        if (!agent)
-          return fail(payload.id, 404, `unknown agent: ${agentId}`);
+        if (!agent) return fail(payload.id, 404, `unknown agent: ${agentId}`);
+
         const run = await agent.send(prompt);
+        const runId = run.id;
+
+        // Tell the parent the run started so the UI can show its placeholder.
+        emitEvent("ai:run-start", { runId });
+
+        // Drain the event stream concurrently so text and tool-call updates
+        // reach the user as soon as the model emits them, instead of after
+        // the whole agent loop finishes. Errors here are reported via an
+        // ai:error event but don't abort the run — `run.wait()` is still
+        // the source of truth for the final result.
+        const streamTask = (async () => {
+          if (!run.supports("stream")) return;
+          try {
+            for await (const event of run.stream()) {
+              forwardStreamEvent(runId, event);
+            }
+          } catch (err) {
+            emitEvent("ai:error", {
+              runId,
+              message: err instanceof Error ? err.message : String(err),
+            });
+          }
+        })();
+
         const final = await run.wait();
+        await streamTask.catch(() => {});
+
+        emitEvent("ai:run-end", {
+          runId,
+          status: final.status,
+          result: final.result,
+        });
+
         return ok(payload.id, {
-          runId: run.id,
+          runId,
           status: final.status,
           result: final.result,
         });

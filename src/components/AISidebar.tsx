@@ -117,37 +117,82 @@ export function AISidebar() {
       role: "user",
       text: trimmed,
     };
+    const placeholderId = crypto.randomUUID();
     const placeholder: Message = {
-      id: crypto.randomUUID(),
+      id: placeholderId,
       role: "assistant",
       text: "",
       pending: true,
     };
     setMessages((m) => [...m, userMsg, placeholder]);
     setBusy(true);
-    try {
-      const agentId = await ensureAgent();
-      const res = await ipc.aiSend(agentId, trimmed);
-      const text =
-        typeof res.result === "string" && res.result.length > 0
-          ? res.result
-          : `(no text result — status: ${res.status})`;
+
+    // Subscribe to streaming events for this turn. We accept any incoming
+    // text/tool/thinking event without runId-matching because the sidebar
+    // serialises sends — only one run is active at a time.
+    const unsubs: Array<() => void> = [];
+    const appendText = (chunk: string) => {
       setMessages((m) =>
         m.map((msg) =>
-          msg.id === placeholder.id ? { ...msg, text, pending: false } : msg
+          msg.id === placeholderId
+            ? { ...msg, text: msg.text + chunk, pending: false }
+            : msg
         )
+      );
+    };
+    const setStatus = (line: string) => {
+      setMessages((m) =>
+        m.map((msg) =>
+          msg.id === placeholderId && msg.text.length === 0
+            ? { ...msg, text: `(${line}…)`, pending: true }
+            : msg
+        )
+      );
+    };
+
+    try {
+      unsubs.push(await ipc.onAiText((e) => appendText(e.text)));
+      unsubs.push(
+        await ipc.onAiThinking(() => setStatus("thinking"))
+      );
+      unsubs.push(
+        await ipc.onAiTool((e) => setStatus(`running ${e.name}`))
+      );
+      unsubs.push(
+        await ipc.onAiRunStart(() => setStatus("connecting"))
+      );
+
+      const agentId = await ensureAgent();
+      const res = await ipc.aiSend(agentId, trimmed);
+
+      // Sometimes the SDK doesn't emit a streamable transcript and we only
+      // get the final aggregate from run.wait(). Fall back to that if no
+      // text events arrived during the run.
+      setMessages((m) =>
+        m.map((msg) => {
+          if (msg.id !== placeholderId) return msg;
+          if (msg.text && !msg.text.startsWith("(")) {
+            return { ...msg, pending: false };
+          }
+          const fallback =
+            typeof res.result === "string" && res.result.length > 0
+              ? res.result
+              : `(no text result — status: ${res.status})`;
+          return { ...msg, text: fallback, pending: false };
+        })
       );
     } catch (e) {
       const msg = humanizeError(e);
       setError(msg);
       setMessages((m) =>
         m.map((x) =>
-          x.id === placeholder.id
+          x.id === placeholderId
             ? { ...x, text: msg, pending: false, role: "system" }
             : x
         )
       );
     } finally {
+      unsubs.forEach((u) => u());
       setBusy(false);
     }
   };

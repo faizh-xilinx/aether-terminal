@@ -137,6 +137,36 @@ export const ipc = {
   authInstallCli(): Promise<string> {
     return invoke("auth_install_cli");
   },
+
+  // ── AI streaming events (forwarded from the sidecar via Rust) ────────────
+  onAiText(cb: (e: { runId: string; text: string }) => void): Promise<UnlistenFn> {
+    return listen<{ runId: string; text: string }>("ai:text", (e) => cb(e.payload));
+  },
+
+  onAiThinking(
+    cb: (e: { runId: string; text: string }) => void
+  ): Promise<UnlistenFn> {
+    return listen<{ runId: string; text: string }>("ai:thinking", (e) =>
+      cb(e.payload)
+    );
+  },
+
+  onAiTool(cb: (e: { runId: string; name: string }) => void): Promise<UnlistenFn> {
+    return listen<{ runId: string; name: string }>("ai:tool", (e) => cb(e.payload));
+  },
+
+  onAiRunStart(cb: (e: { runId: string }) => void): Promise<UnlistenFn> {
+    return listen<{ runId: string }>("ai:run-start", (e) => cb(e.payload));
+  },
+
+  onAiRunEnd(
+    cb: (e: { runId: string; status: string; result?: string }) => void
+  ): Promise<UnlistenFn> {
+    return listen<{ runId: string; status: string; result?: string }>(
+      "ai:run-end",
+      (e) => cb(e.payload)
+    );
+  },
 };
 
 export interface AuthStatus {
