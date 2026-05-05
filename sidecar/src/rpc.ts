@@ -114,9 +114,8 @@ export async function handleRequest(payload: unknown): Promise<RpcResponse | nul
       });
     }
     logger.error({ err: detail }, "rpc handler error");
-    return fail(payload.id, 500, summarise("rpc handler error", detail), {
-      detail,
-    });
+    const top = err instanceof Error ? err.message : String(err);
+    return fail(payload.id, 500, summarise(top, detail), { detail });
   }
 }
 

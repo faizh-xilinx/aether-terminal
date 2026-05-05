@@ -50,11 +50,10 @@ export function AuthDialog({ open, onOpenChange }: Props) {
   const signInWithBrowser = async () => {
     setError(null);
 
-    // Fast path: an auth.json may already exist from a previous CLI login,
-    // or from your Cursor IDE session — adopt it directly when it's an API
-    // key. Skip auto-adopt for JWT session tokens because the public SDK
-    // rejects those; sending the user to the dashboard saves a confusing
-    // round-trip.
+    // Fast path: if an auth.json exists with a real API key already
+    // (rare — only happens if the user already pasted one through the
+    // CLI) we can adopt silently. JWT session tokens get skipped here
+    // because the public Cursor SDK rejects them.
     if (authJsonAvailable && !authJsonIsSession) {
       try {
         if (await ipc.authAdoptCliToken()) {
@@ -63,38 +62,20 @@ export function AuthDialog({ open, onOpenChange }: Props) {
           return;
         }
       } catch {
-        // Fall through to the interactive flow.
+        // Fall through to the interactive flow below.
       }
     }
 
-    if (cliAvailable) {
-      setStage({ kind: "browser-login" });
-      try {
-        await ipc.authRunCliLogin();
-        // Brief settle window: cursor-agent may write auth.json fractions
-        // of a second after exiting.
-        for (let i = 0; i < 10; i++) {
-          if (await ipc.authAdoptCliToken()) {
-            await auth.refresh();
-            onOpenChange(false);
-            return;
-          }
-          await new Promise((r) => setTimeout(r, 200));
-        }
-        throw new Error(
-          "cursor-agent finished but no auth.json was found in any known location. Did you complete the browser login?"
-        );
-      } catch (e) {
-        setError(String(e));
-        setStage({ kind: "idle" });
-      }
-    } else {
-      try {
-        await ipc.authOpenDashboard();
-        setStage({ kind: "paste", afterDashboard: true });
-      } catch (e) {
-        setError(String(e));
-      }
+    // Universal path: open the dashboard in the user's default browser
+    // and reveal the paste form. We deliberately do NOT shell out to
+    // `cursor-agent login`: that flow produces a JWT session token which
+    // the @cursor/sdk does not accept, so we'd just bounce the user
+    // through an extra browser trip for nothing.
+    try {
+      await ipc.authOpenDashboard();
+      setStage({ kind: "paste", afterDashboard: true });
+    } catch (e) {
+      setError(String(e));
     }
   };
 
@@ -122,15 +103,36 @@ export function AuthDialog({ open, onOpenChange }: Props) {
       setError("Paste your Cursor API key first");
       return;
     }
+    if (trimmed.startsWith("eyJ")) {
+      setError(
+        "That looks like a JWT session token, not an API key. On the dashboard click 'Create new key' under API Keys — the value you copy should start with crsr_."
+      );
+      return;
+    }
+    if (!trimmed.startsWith("crsr_")) {
+      setError(
+        "Cursor API keys start with 'crsr_'. Copy the value from cursor.com/dashboard/integrations under API Keys."
+      );
+      return;
+    }
     setError(null);
     setStage({ kind: "validating" });
     try {
       await auth.saveToken(trimmed);
+      // Real validation: ask the sidecar to spawn an agent with this key.
+      // ai_create_agent calls @cursor/sdk's Agent.create, so a bad key
+      // surfaces here before we leave the dialog.
       try {
-        await ipc.aiPing();
-      } catch (pingErr) {
+        await ipc.aiCreateAgent();
+      } catch (createErr) {
         await auth.forget();
-        throw new Error(`Token rejected by Cursor: ${pingErr}`);
+        const msg =
+          typeof createErr === "string" ? createErr : String(createErr);
+        throw new Error(
+          msg.includes("Error")
+            ? "Cursor rejected this key. Double-check you copied the full value from the dashboard."
+            : msg
+        );
       }
       onOpenChange(false);
     } catch (e) {
