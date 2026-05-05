@@ -148,14 +148,19 @@ pub async fn ai_create_agent(
     model: Option<String>,
 ) -> AetherResult<String> {
     let api_key = auth::active_token().map_err(|e| AetherError::Vault(e.to_string()))?;
-    if api_key.is_none() {
+    let Some(api_key) = api_key else {
         return Err(AetherError::Other(anyhow::anyhow!(
             "not signed in to Cursor — open the AI sidebar to sign in"
+        )));
+    };
+    if !auth::token_looks_like_api_key(&api_key) {
+        return Err(AetherError::Other(anyhow::anyhow!(
+            "Aether is using your Cursor IDE session token, but the @cursor/sdk requires a real API key (the value that starts with `crsr_`). Sign out from the AI header pill, then click 'Continue with Cursor' to open cursor.com/dashboard/integrations and paste a key generated there."
         )));
     }
     get_ai(&state)
         .await?
-        .create_agent(cwd, model, api_key)
+        .create_agent(cwd, model, Some(api_key))
         .await
 }
 

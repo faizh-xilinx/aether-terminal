@@ -83,14 +83,58 @@ export async function handleRequest(payload: unknown): Promise<RpcResponse | nul
         return fail(payload.id, -32601, `unknown method: ${payload.method}`);
     }
   } catch (err) {
+    // Surface as much detail as the SDK gave us. Cursor's CursorAgentError
+    // sometimes wraps an underlying transport / auth failure whose real
+    // message lives in `cause`, `data`, or the stack trace, not the
+    // top-level `message`.
+    const cause =
+      err && typeof err === "object" && "cause" in err
+        ? (err as { cause?: unknown }).cause
+        : undefined;
+    const detail =
+      err instanceof Error
+        ? [err.message, cause ? String(cause) : "", err.stack ?? ""]
+            .filter(Boolean)
+            .join(" | ")
+        : String(err);
+
     if (err instanceof CursorAgentError) {
-      logger.error({ err: err.message, retryable: err.isRetryable }, "Cursor SDK error");
-      return fail(payload.id, 500, err.message, { retryable: err.isRetryable });
+      logger.error(
+        {
+          err: err.message,
+          retryable: err.isRetryable,
+          cause: cause ? String(cause) : undefined,
+          stack: err.stack,
+        },
+        "Cursor SDK error"
+      );
+      return fail(payload.id, 500, summarise(err.message, detail), {
+        retryable: err.isRetryable,
+        detail,
+      });
     }
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error({ err: msg }, "rpc handler error");
-    return fail(payload.id, 500, msg);
+    logger.error({ err: detail }, "rpc handler error");
+    return fail(payload.id, 500, summarise("rpc handler error", detail), {
+      detail,
+    });
   }
+}
+
+/**
+ * Pick the most useful sentence available in an error chain. SDK errors with
+ * a generic `.message === "Error"` are common when the real cause is buried
+ * one level down; prefer the first non-trivial line.
+ */
+function summarise(top: string, detail: string): string {
+  const trimmed = (top ?? "").trim();
+  if (trimmed && trimmed.toLowerCase() !== "error" && trimmed !== "[object Object]") {
+    return trimmed;
+  }
+  const lines = detail
+    .split(/\||\n/)
+    .map((s) => s.trim())
+    .filter((s) => s && s.toLowerCase() !== "error" && !s.startsWith("at "));
+  return lines[0] ?? trimmed ?? "unknown error";
 }
 
 function isRequest(p: unknown): p is RpcRequest {

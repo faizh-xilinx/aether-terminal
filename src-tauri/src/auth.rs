@@ -90,6 +90,17 @@ pub fn active_token() -> anyhow::Result<Option<String>> {
     Ok(None)
 }
 
+/// Returns true if the token looks like a Cursor public API key (`crsr_…`)
+/// rather than a JWT-shaped session token. The official `@cursor/sdk` accepts
+/// only the API-key shape — JWTs from `auth.json` (Cursor IDE / CLI session
+/// tokens) make Agent.create throw an opaque `CursorAgentError("Error")`.
+pub fn token_looks_like_api_key(token: &str) -> bool {
+    let t = token.trim();
+    // crsr_ keys are the documented public form. Service-account keys also
+    // use this prefix. JWTs always start with "eyJ" (base64-encoded JSON).
+    t.starts_with("crsr_") && !t.starts_with("eyJ")
+}
+
 pub fn save_token(token: &str) -> anyhow::Result<()> {
     let trimmed = token.trim();
     if trimmed.is_empty() {

@@ -23,6 +23,38 @@ interface Message {
   pending?: boolean;
 }
 
+/**
+ * Convert whatever shape the Rust/sidecar threw into a readable sentence.
+ * The Tauri IPC layer can hand us an Error, a JSON string of `{code, data,
+ * message}`, or a primitive — pick the most useful field of each.
+ */
+function humanizeError(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") {
+    const trimmed = e.trim();
+    if (trimmed.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        const candidate =
+          parsed?.message ?? parsed?.error ?? parsed?.detail ?? "";
+        if (typeof candidate === "string" && candidate.trim().length > 0) {
+          return candidate.trim();
+        }
+      } catch {
+        // not JSON, fall through
+      }
+    }
+    return trimmed;
+  }
+  if (e && typeof e === "object") {
+    const obj = e as Record<string, unknown>;
+    if (typeof obj.message === "string") return obj.message;
+    if (typeof obj.error === "string") return obj.error;
+    return JSON.stringify(e);
+  }
+  return String(e);
+}
+
 const SUGGESTIONS = [
   {
     icon: <Wand2 className="h-3.5 w-3.5" />,
@@ -106,7 +138,7 @@ export function AISidebar() {
         )
       );
     } catch (e) {
-      const msg = String(e);
+      const msg = humanizeError(e);
       setError(msg);
       setMessages((m) =>
         m.map((x) =>
@@ -188,9 +220,29 @@ export function AISidebar() {
       </div>
 
       {error && (
-        <div className="mx-3 mb-2 px-2.5 py-1.5 rounded-md bg-danger/10 border border-danger/30 text-[11px] text-danger flex items-start gap-1.5">
+        <div className="mx-3 mb-2 px-2.5 py-2 rounded-md bg-danger/10 border border-danger/30 text-[11px] text-danger flex items-start gap-1.5">
           <AlertCircle className="h-3 w-3 mt-0.5 shrink-0" />
-          <span className="break-all">{error}</span>
+          <div className="flex-1 min-w-0">
+            <div className="break-words whitespace-pre-wrap">{error}</div>
+            {/api key|crsr_/i.test(error) && (
+              <button
+                onClick={async () => {
+                  try {
+                    await ipc.authForget();
+                    await ipc.authOpenDashboard();
+                    toggleAuth(true);
+                  } catch {
+                    /* fall through; user can still open the dialog manually */
+                  }
+                }}
+                className="mt-1.5 inline-flex items-center gap-1 px-2 py-1 rounded
+                           bg-accent/15 hover:bg-accent/25 border border-accent/30
+                           text-accent text-[11px]"
+              >
+                Open dashboard & paste an API key →
+              </button>
+            )}
+          </div>
         </div>
       )}
 
