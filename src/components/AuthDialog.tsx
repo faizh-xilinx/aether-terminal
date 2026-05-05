@@ -44,21 +44,27 @@ export function AuthDialog({ open, onOpenChange }: Props) {
   if (!open) return null;
 
   const cliAvailable = auth.status?.cli_available ?? false;
+  const authJsonAvailable = auth.status?.auth_json_available ?? false;
+  const authJsonIsSession = auth.status?.auth_json_is_session ?? false;
 
   const signInWithBrowser = async () => {
     setError(null);
 
     // Fast path: an auth.json may already exist from a previous CLI login,
-    // or from your Cursor IDE session — in either case we can adopt it
-    // directly without forcing another browser dance.
-    try {
-      if (await ipc.authAdoptCliToken()) {
-        await auth.refresh();
-        onOpenChange(false);
-        return;
+    // or from your Cursor IDE session — adopt it directly when it's an API
+    // key. Skip auto-adopt for JWT session tokens because the public SDK
+    // rejects those; sending the user to the dashboard saves a confusing
+    // round-trip.
+    if (authJsonAvailable && !authJsonIsSession) {
+      try {
+        if (await ipc.authAdoptCliToken()) {
+          await auth.refresh();
+          onOpenChange(false);
+          return;
+        }
+      } catch {
+        // Fall through to the interactive flow.
       }
-    } catch {
-      // Fall through to the interactive flow.
     }
 
     if (cliAvailable) {
@@ -186,14 +192,29 @@ export function AuthDialog({ open, onOpenChange }: Props) {
 
           {stage.kind === "idle" && !auth.status?.authenticated && (
             <>
+              {authJsonAvailable && authJsonIsSession && (
+                <div className="px-3 py-2 rounded-md bg-warn/10 border border-warn/30 text-[11px] text-warn">
+                  We found your Cursor IDE login on disk, but it's a session
+                  token — the public Cursor SDK needs an API key (the value
+                  that starts with <code className="font-mono">crsr_</code>).
+                  Generate one at{" "}
+                  <span className="font-mono">cursor.com/dashboard/integrations</span>
+                  {" "}and paste it below.
+                </div>
+              )}
+
               <button onClick={signInWithBrowser} className="auth-btn-primary">
                 <Mail className="h-4 w-4" />
                 <span className="flex-1 text-left">
                   <div>Continue with Cursor</div>
                   <div className="text-[11px] opacity-70">
-                    {cliAvailable
-                      ? "Sign in with your email in the browser"
-                      : "Open Cursor dashboard, paste your key once"}
+                    {authJsonAvailable && !authJsonIsSession
+                      ? "Use the existing API key from your Cursor login"
+                      : authJsonIsSession
+                        ? "Open dashboard, generate an API key, paste it here"
+                        : cliAvailable
+                          ? "Sign in with your email in the browser"
+                          : "Open Cursor dashboard, paste your key once"}
                   </div>
                 </span>
                 <ExternalLink className="h-3.5 w-3.5 opacity-60" />

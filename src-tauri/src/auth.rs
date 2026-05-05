@@ -38,6 +38,14 @@ pub struct AuthStatus {
     pub cli_available: bool,
     /// Path to the cursor-agent binary, if found.
     pub cli_path: Option<String>,
+    /// True if an `auth.json` exists somewhere we know about (Cursor IDE,
+    /// `cursor-agent` CLI). Aether will *not* auto-adopt it — the UI uses
+    /// this flag to offer a one-click "Reuse IDE login".
+    pub auth_json_available: bool,
+    /// True if the on-disk auth.json appears to be a JWT session token
+    /// (which the public SDK doesn't accept) rather than a `crsr_…` API key.
+    /// Lets the UI warn before adopting.
+    pub auth_json_is_session: bool,
     /// User identifier surfaced by the CLI / SDK, if known.
     pub user: Option<String>,
 }
@@ -57,32 +65,44 @@ pub fn status() -> AuthStatus {
         None => (false, None),
     };
 
+    // Authenticated state is determined ONLY by the keyring or an explicit
+    // env var. The presence of a CLI/IDE auth.json on disk is a *candidate*
+    // for sign-in, not a sign-in itself — otherwise sign-out would silently
+    // re-adopt the IDE token on the very next status refresh, making
+    // sign-out feel broken.
     let (authenticated, source, user) = if let Ok(Some(_)) = vault::get(VAULT_KEY) {
         (true, AuthSource::Keyring, None)
     } else if std::env::var("CURSOR_API_KEY").is_ok() {
         (true, AuthSource::EnvVar, None)
-    } else if let Ok(Some(token)) = read_cursor_cli_token() {
-        (true, AuthSource::CursorCli, token.user_email)
     } else {
         (false, AuthSource::None, None)
     };
+
+    // Probe for an existing auth.json without adopting it.
+    let candidate = read_cursor_cli_token().ok().flatten();
+    let auth_json_available = candidate.is_some();
+    let auth_json_is_session = candidate
+        .as_ref()
+        .map(|t| !token_looks_like_api_key(&t.access_token))
+        .unwrap_or(false);
 
     AuthStatus {
         authenticated,
         source,
         cli_available,
         cli_path,
-        user,
+        auth_json_available,
+        auth_json_is_session,
+        user: user.or_else(|| candidate.and_then(|t| t.user_email)),
     }
 }
 
-/// Returns the active token in priority order: keyring → CLI auth.json → env var.
+/// Returns the active token used by the SDK. Only sources we consider an
+/// explicit sign-in: keyring, env var. The CLI / IDE `auth.json` is reached
+/// via [`adopt_cli_token`] under user consent, never automatically.
 pub fn active_token() -> anyhow::Result<Option<String>> {
     if let Some(t) = vault::get(VAULT_KEY)? {
         return Ok(Some(t));
-    }
-    if let Ok(Some(token)) = read_cursor_cli_token() {
-        return Ok(Some(token.access_token));
     }
     if let Ok(t) = std::env::var("CURSOR_API_KEY") {
         return Ok(Some(t));

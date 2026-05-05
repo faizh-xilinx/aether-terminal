@@ -144,5 +144,7 @@ export interface AuthStatus {
   source: "none" | "keyring" | "env_var" | "cursor_cli";
   cli_available: boolean;
   cli_path: string | null;
+  auth_json_available: boolean;
+  auth_json_is_session: boolean;
   user: string | null;
 }
