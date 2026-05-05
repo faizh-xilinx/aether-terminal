@@ -9,16 +9,23 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { QuickConnect } from "@/components/QuickConnect";
 import { AISidebar } from "@/components/AISidebar";
 import { AuthDialog } from "@/components/AuthDialog";
+import { SplitPane } from "@/components/SplitPane";
 import { useSessions } from "@/store/sessions";
+import { useLayout } from "@/store/layout";
 import { useUI } from "@/store/ui";
 import { useAuth } from "@/store/auth";
-import { ipc } from "@/lib/ipc";
+import { cn } from "@/lib/cn";
+import {
+  closeActivePane,
+  openTabWithSpec,
+  splitActivePane,
+} from "@/lib/panes";
 
 export default function App() {
   const tabs = useSessions((s) => s.tabs);
-  const activeId = useSessions((s) => s.activeId);
-  const addTab = useSessions((s) => s.addTab);
-  const patchTab = useSessions((s) => s.patchTab);
+  const activeTabId = useSessions((s) => s.activeTabId);
+  const panes = useSessions((s) => s.panes);
+  const trees = useLayout((s) => s.trees);
   const aiOpen = useUI((s) => s.aiOpen);
   const authOpen = useUI((s) => s.authOpen);
   const togglePalette = useUI((s) => s.togglePalette);
@@ -33,37 +40,47 @@ export default function App() {
 
   useEffect(() => {
     if (tabs.length === 0) {
-      const tabId = crypto.randomUUID();
-      addTab({
-        id: tabId,
-        sessionId: null,
-        kind: "local",
-        title: "local",
-        busy: true,
-        exited: false,
-      });
-      ipc
-        .openLocal(80, 24)
-        .then((sessionId) => patchTab(tabId, { sessionId, busy: false }))
-        .catch((err) => {
-          console.error("failed to open local session", err);
-          patchTab(tabId, { busy: false, exited: true });
-        });
+      openTabWithSpec({ kind: "local" }).catch((err) =>
+        console.error("could not open initial local tab", err)
+      );
     }
-  }, [tabs.length, addTab, patchTab]);
+  }, [tabs.length]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
-      if (mod && e.key.toLowerCase() === "p" && e.shiftKey) {
+      // Mod + Shift + P → command palette
+      if (mod && e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
         togglePalette();
-      } else if (mod && e.key.toLowerCase() === "k") {
+        return;
+      }
+      // Mod + K → quick connect
+      if (mod && !e.shiftKey && e.key.toLowerCase() === "k") {
         e.preventDefault();
         toggleConnect();
-      } else if (mod && e.key.toLowerCase() === "i") {
+        return;
+      }
+      // Mod + I → toggle AI sidebar
+      if (mod && !e.shiftKey && e.key.toLowerCase() === "i") {
         e.preventDefault();
         toggleAi();
+        return;
+      }
+      // Mod + \  → split right (vertical divider)
+      // Mod + Shift + \ → split down (horizontal divider)
+      if (mod && (e.key === "\\" || e.code === "Backslash")) {
+        e.preventDefault();
+        splitActivePane(e.shiftKey ? "v" : "h").catch((err) =>
+          console.error("split failed", err)
+        );
+        return;
+      }
+      // Mod + Shift + W → close active pane
+      if (mod && e.shiftKey && e.key.toLowerCase() === "w") {
+        e.preventDefault();
+        closeActivePane().catch(() => {});
+        return;
       }
     };
     window.addEventListener("keydown", onKey);
@@ -79,13 +96,33 @@ export default function App() {
           <TabBar />
           <div className="flex flex-1 min-h-0">
             <div className="flex-1 min-w-0 relative">
-              {tabs.map((tab) => (
-                <TerminalView
-                  key={tab.id}
-                  tab={tab}
-                  active={tab.id === activeId}
-                />
-              ))}
+              {tabs.map((tab) => {
+                const tree = trees[tab.id];
+                if (!tree) return null;
+                return (
+                  <div
+                    key={tab.id}
+                    className={cn(
+                      "absolute inset-0",
+                      tab.id === activeTabId
+                        ? "visible z-10"
+                        : "invisible -z-10 pointer-events-none"
+                    )}
+                  >
+                    <SplitPane
+                      tabId={tab.id}
+                      layout={tree}
+                      path={[]}
+                      renderPane={(paneId, isActive) => {
+                        const pane = panes[paneId];
+                        return pane ? (
+                          <TerminalView pane={pane} active={isActive} />
+                        ) : null;
+                      }}
+                    />
+                  </div>
+                );
+              })}
               {tabs.length === 0 && (
                 <div className="absolute inset-0 flex items-center justify-center text-fg-subtle">
                   No active sessions

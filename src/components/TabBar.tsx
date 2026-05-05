@@ -1,79 +1,87 @@
-import { Plus, X, Server, Terminal as TermIcon, Loader2 } from "lucide-react";
+import { Plus, X, Server, Terminal as TermIcon, Loader2, Columns2 } from "lucide-react";
 
 import { cn } from "@/lib/cn";
 import { useSessions } from "@/store/sessions";
+import { useLayout } from "@/store/layout";
 import { useUI } from "@/store/ui";
-import { ipc } from "@/lib/ipc";
+import { closePaneById, openTabWithSpec, splitActivePane } from "@/lib/panes";
 
 export function TabBar() {
   const tabs = useSessions((s) => s.tabs);
-  const activeId = useSessions((s) => s.activeId);
-  const setActive = useSessions((s) => s.setActive);
-  const removeTab = useSessions((s) => s.removeTab);
-  const addTab = useSessions((s) => s.addTab);
-  const patchTab = useSessions((s) => s.patchTab);
+  const activeTabId = useSessions((s) => s.activeTabId);
+  const panes = useSessions((s) => s.panes);
+  const setActiveTab = useSessions((s) => s.setActiveTab);
+  const trees = useLayout((s) => s.trees);
   const toggleConnect = useUI((s) => s.toggleConnect);
 
   const newLocal = () => {
-    const tabId = crypto.randomUUID();
-    addTab({
-      id: tabId,
-      sessionId: null,
-      kind: "local",
-      title: "local",
-      busy: true,
-      exited: false,
-    });
-    ipc
-      .openLocal(80, 24)
-      .then((sid) => patchTab(tabId, { sessionId: sid, busy: false }))
-      .catch(() => patchTab(tabId, { busy: false, exited: true }));
+    openTabWithSpec({ kind: "local" }).catch(() => {});
   };
 
-  const close = (id: string) => {
-    const tab = tabs.find((t) => t.id === id);
-    if (tab?.sessionId) ipc.closeSession(tab.sessionId).catch(() => {});
-    removeTab(id);
+  const closeTab = (tabId: string) => {
+    const tree = useLayout.getState().trees[tabId];
+    if (!tree) return;
+    const paneIds = useLayout.getState().collectPanes(tabId);
+    paneIds.forEach((pid) => closePaneById(tabId, pid).catch(() => {}));
   };
 
   return (
     <div className="h-10 flex items-center border-b border-border bg-bg/50 px-2 gap-1 overflow-x-auto">
-      {tabs.map((t) => (
-        <button
-          key={t.id}
-          onClick={() => setActive(t.id)}
-          onAuxClick={(e) => e.button === 1 && close(t.id)}
-          className={cn(
-            "group relative flex items-center gap-2 h-7 pl-2 pr-1 rounded-md",
-            "text-[12px] text-fg-muted hover:text-fg transition-colors max-w-[200px]",
-            t.id === activeId
-              ? "bg-bg-elevated text-fg shadow-sm"
-              : "hover:bg-bg-subtle"
-          )}
-        >
-          {t.busy ? (
-            <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-          ) : t.kind === "ssh" ? (
-            <Server className="h-3 w-3 shrink-0 text-accent" />
-          ) : (
-            <TermIcon className="h-3 w-3 shrink-0" />
-          )}
-          <span className="truncate">{t.title}</span>
-          {t.exited && <span className="pill !py-0 !text-[9px]">exited</span>}
-          <span
-            role="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              close(t.id);
-            }}
-            className="ml-1 h-4 w-4 inline-flex items-center justify-center rounded
-                       text-fg-subtle hover:text-fg hover:bg-bg/80 opacity-0
-                       group-hover:opacity-100 transition-opacity"
+      {tabs.map((tab) => {
+        const paneIds = trees[tab.id]
+          ? useLayout.getState().collectPanes(tab.id)
+          : [];
+        const tabPanes = paneIds
+          .map((pid) => panes[pid])
+          .filter((p): p is NonNullable<typeof p> => Boolean(p));
+        const anyBusy = tabPanes.some((p) => p.busy);
+        const allExited = tabPanes.length > 0 && tabPanes.every((p) => p.exited);
+        const anySsh = tabPanes.some((p) => p.kind === "ssh");
+        const split = tabPanes.length > 1;
+
+        return (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            onAuxClick={(e) => e.button === 1 && closeTab(tab.id)}
+            className={cn(
+              "group relative flex items-center gap-2 h-7 pl-2 pr-1 rounded-md",
+              "text-[12px] text-fg-muted hover:text-fg transition-colors max-w-[220px]",
+              tab.id === activeTabId
+                ? "bg-bg-elevated text-fg shadow-sm"
+                : "hover:bg-bg-subtle"
+            )}
           >
-            <X className="h-3 w-3" />
-          </span>
-        </button>
-      ))}
+            {anyBusy ? (
+              <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+            ) : anySsh ? (
+              <Server className="h-3 w-3 shrink-0 text-accent" />
+            ) : (
+              <TermIcon className="h-3 w-3 shrink-0" />
+            )}
+            <span className="truncate">{tab.title}</span>
+            {split && (
+              <span title={`${tabPanes.length} panes`} className="pill !py-0 !text-[9px] !px-1.5">
+                <Columns2 className="h-2.5 w-2.5" />
+                {tabPanes.length}
+              </span>
+            )}
+            {allExited && <span className="pill !py-0 !text-[9px]">exited</span>}
+            <span
+              role="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                closeTab(tab.id);
+              }}
+              className="ml-1 h-4 w-4 inline-flex items-center justify-center rounded
+                         text-fg-subtle hover:text-fg hover:bg-bg/80 opacity-0
+                         group-hover:opacity-100 transition-opacity"
+            >
+              <X className="h-3 w-3" />
+            </span>
+          </button>
+        );
+      })}
       <div className="flex items-center gap-1 ml-1">
         <button
           onClick={newLocal}
@@ -91,6 +99,23 @@ export function TabBar() {
         >
           <Server className="h-3.5 w-3.5" /> SSH
           <span className="kbd">⌘K</span>
+        </button>
+        <span className="w-px h-4 bg-border mx-1" />
+        <button
+          onClick={() => splitActivePane("h").catch(() => {})}
+          title="Split right (Ctrl+\\)"
+          className="h-7 w-7 inline-flex items-center justify-center rounded-md
+                     text-fg-muted hover:text-fg hover:bg-bg-elevated"
+        >
+          <Columns2 className="h-3.5 w-3.5" />
+        </button>
+        <button
+          onClick={() => splitActivePane("v").catch(() => {})}
+          title="Split down (Ctrl+Shift+\\)"
+          className="h-7 w-7 inline-flex items-center justify-center rounded-md
+                     text-fg-muted hover:text-fg hover:bg-bg-elevated rotate-90"
+        >
+          <Columns2 className="h-3.5 w-3.5" />
         </button>
       </div>
     </div>

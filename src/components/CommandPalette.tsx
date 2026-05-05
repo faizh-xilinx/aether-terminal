@@ -10,13 +10,18 @@ import {
   Settings as Cog,
   LogIn,
   LogOut,
+  Columns2,
+  X,
 } from "lucide-react";
 
 import { useUI } from "@/store/ui";
-import { useSessions } from "@/store/sessions";
 import { useAuth } from "@/store/auth";
 import { THEMES } from "@/lib/themes";
-import { ipc } from "@/lib/ipc";
+import {
+  closeActivePane,
+  openTabWithSpec,
+  splitActivePane,
+} from "@/lib/panes";
 
 export function CommandPalette() {
   const open = useUI((s) => s.paletteOpen);
@@ -25,8 +30,6 @@ export function CommandPalette() {
   const toggleAi = useUI((s) => s.toggleAi);
   const toggleAuth = useUI((s) => s.toggleAuth);
   const setTheme = useUI((s) => s.setTheme);
-  const addTab = useSessions((s) => s.addTab);
-  const patchTab = useSessions((s) => s.patchTab);
   const authStatus = useAuth((s) => s.status);
   const forgetAuth = useAuth((s) => s.forget);
 
@@ -42,19 +45,7 @@ export function CommandPalette() {
   }, [open, togglePalette]);
 
   const newLocal = () => {
-    const tabId = crypto.randomUUID();
-    addTab({
-      id: tabId,
-      sessionId: null,
-      kind: "local",
-      title: "local",
-      busy: true,
-      exited: false,
-    });
-    ipc
-      .openLocal(80, 24)
-      .then((sid) => patchTab(tabId, { sessionId: sid, busy: false }))
-      .catch(() => patchTab(tabId, { busy: false, exited: true }));
+    openTabWithSpec({ kind: "local" }).catch(() => {});
     togglePalette(false);
   };
 
@@ -96,6 +87,36 @@ export function CommandPalette() {
                 kbd="⌘K"
               >
                 Connect via SSH…
+              </Item>
+              <Item
+                icon={<Columns2 className="h-4 w-4" />}
+                onSelect={() => {
+                  togglePalette(false);
+                  splitActivePane("h").catch(() => {});
+                }}
+                kbd="⌘\\"
+              >
+                Split active pane right
+              </Item>
+              <Item
+                icon={<Columns2 className="h-4 w-4 rotate-90" />}
+                onSelect={() => {
+                  togglePalette(false);
+                  splitActivePane("v").catch(() => {});
+                }}
+                kbd="⇧⌘\\"
+              >
+                Split active pane down
+              </Item>
+              <Item
+                icon={<X className="h-4 w-4" />}
+                onSelect={() => {
+                  togglePalette(false);
+                  closeActivePane().catch(() => {});
+                }}
+                kbd="⇧⌘W"
+              >
+                Close active pane
               </Item>
             </Command.Group>
             <Command.Group heading="AI">

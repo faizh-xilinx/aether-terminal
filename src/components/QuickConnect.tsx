@@ -2,15 +2,13 @@ import { useEffect, useState } from "react";
 import { Server, KeyRound, User, ChevronRight } from "lucide-react";
 
 import { useUI } from "@/store/ui";
-import { useSessions } from "@/store/sessions";
 import { ipc, type HostEntry } from "@/lib/ipc";
+import { openTabWithSpec } from "@/lib/panes";
 import { cn } from "@/lib/cn";
 
 export function QuickConnect() {
   const open = useUI((s) => s.connectOpen);
   const toggle = useUI((s) => s.toggleConnect);
-  const addTab = useSessions((s) => s.addTab);
-  const patchTab = useSessions((s) => s.patchTab);
 
   const [hosts, setHosts] = useState<HostEntry[]>([]);
   const [filter, setFilter] = useState("");
@@ -67,31 +65,18 @@ export function QuickConnect() {
       return;
     }
     setConnecting(true);
-    const tabId = crypto.randomUUID();
-    addTab({
-      id: tabId,
-      sessionId: null,
-      kind: "ssh",
-      title: `${user}@${host}`,
-      subtitle: `${host}:${port}`,
-      busy: true,
-      exited: false,
-    });
     try {
-      const sid = await ipc.openSsh({
+      await openTabWithSpec({
+        kind: "ssh",
         host,
         port: Number(port) || 22,
         user,
         password: auth === "password" ? password : undefined,
         privateKeyPath: auth === "key" ? keyPath || undefined : undefined,
-        cols: 80,
-        rows: 24,
       });
-      patchTab(tabId, { sessionId: sid, busy: false });
       toggle(false);
     } catch (e) {
       setError(String(e));
-      patchTab(tabId, { busy: false, exited: true });
     } finally {
       setConnecting(false);
     }

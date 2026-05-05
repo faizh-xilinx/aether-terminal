@@ -9,20 +9,20 @@ import "@xterm/xterm/css/xterm.css";
 
 import { ipc } from "@/lib/ipc";
 import { useUI } from "@/store/ui";
-import { useSessions, type Tab } from "@/store/sessions";
+import { useSessions, type Pane } from "@/store/sessions";
 import { cn } from "@/lib/cn";
 
 interface Props {
-  tab: Tab;
+  pane: Pane;
   active: boolean;
 }
 
-export function TerminalView({ tab, active }: Props) {
+export function TerminalView({ pane, active }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const theme = useUI((s) => s.theme);
-  const patchTab = useSessions((s) => s.patchTab);
+  const patchPane = useSessions((s) => s.patchPane);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -66,8 +66,8 @@ export function TerminalView({ tab, active }: Props) {
     const ro = new ResizeObserver(() => {
       try {
         fit.fit();
-        if (tab.sessionId) {
-          ipc.resizeSession(tab.sessionId, term.cols, term.rows).catch(() => {});
+        if (pane.sessionId) {
+          ipc.resizeSession(pane.sessionId, term.cols, term.rows).catch(() => {});
         }
       } catch {
         // size 0 during layout transitions, ignore.
@@ -91,31 +91,35 @@ export function TerminalView({ tab, active }: Props) {
   }, [theme]);
 
   useEffect(() => {
-    if (!tab.sessionId || !termRef.current) return;
+    if (!pane.sessionId || !termRef.current) return;
     const term = termRef.current;
 
     let unlistenData: (() => void) | null = null;
     let unlistenExit: (() => void) | null = null;
 
-    ipc.onSessionData(tab.sessionId, (chunk) => term.write(chunk)).then((un) => {
-      unlistenData = un;
-    });
-    ipc.onSessionExit(tab.sessionId, (code) => {
-      patchTab(tab.id, { exited: true, exitCode: code });
-      term.write(`\r\n\x1b[2;90m[process exited with code ${code}]\x1b[0m\r\n`);
-    }).then((un) => {
-      unlistenExit = un;
-    });
+    ipc
+      .onSessionData(pane.sessionId, (chunk) => term.write(chunk))
+      .then((un) => {
+        unlistenData = un;
+      });
+    ipc
+      .onSessionExit(pane.sessionId, (code) => {
+        patchPane(pane.id, { exited: true, exitCode: code });
+        term.write(`\r\n\x1b[2;90m[process exited with code ${code}]\x1b[0m\r\n`);
+      })
+      .then((un) => {
+        unlistenExit = un;
+      });
 
     const onData = term.onData((data) => {
-      if (tab.sessionId) ipc.writeSession(tab.sessionId, data).catch(() => {});
+      if (pane.sessionId) ipc.writeSession(pane.sessionId, data).catch(() => {});
     });
 
     const sizeOnce = () => {
-      if (!fitRef.current || !tab.sessionId) return;
+      if (!fitRef.current || !pane.sessionId) return;
       try {
         fitRef.current.fit();
-        ipc.resizeSession(tab.sessionId, term.cols, term.rows).catch(() => {});
+        ipc.resizeSession(pane.sessionId, term.cols, term.rows).catch(() => {});
       } catch {
         // ignore
       }
@@ -127,7 +131,7 @@ export function TerminalView({ tab, active }: Props) {
       unlistenData?.();
       unlistenExit?.();
     };
-  }, [tab.sessionId, tab.id, patchTab]);
+  }, [pane.sessionId, pane.id, patchPane]);
 
   useEffect(() => {
     if (active && termRef.current) {
@@ -145,10 +149,7 @@ export function TerminalView({ tab, active }: Props) {
   return (
     <div
       ref={containerRef}
-      className={cn(
-        "absolute inset-0",
-        active ? "visible z-10" : "invisible -z-10 pointer-events-none"
-      )}
+      className={cn("h-full w-full", active ? "" : "opacity-95")}
     />
   );
 }
