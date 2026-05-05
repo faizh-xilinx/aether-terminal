@@ -19,6 +19,7 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Mutex;
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,28 @@ use tokio::process::Command;
 use crate::vault;
 
 const VAULT_KEY: &str = "cursor-token";
+
+/// In-process token cache. Primary store; keyring is best-effort backup.
+///
+/// Why a memory cache: Windows Credential Manager (and a few Linux backends
+/// in non-interactive sessions) accept a `set_password()` and then
+/// immediately return `NoEntry` from `get_password()` — documented in
+/// `vault::tests::keyring_round_trip`. Aether hit this exact bug in the
+/// real app: a freshly-pasted token vanished on the very next call to
+/// `active_token()`. The cache makes save → read deterministic for the
+/// life of the process, while we still attempt keyring writes for
+/// cross-launch persistence.
+static TOKEN_CACHE: Mutex<Option<String>> = Mutex::new(None);
+
+fn cache_get() -> Option<String> {
+    TOKEN_CACHE.lock().ok().and_then(|g| g.clone())
+}
+
+fn cache_set(token: Option<String>) {
+    if let Ok(mut g) = TOKEN_CACHE.lock() {
+        *g = token;
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AuthStatus {
@@ -65,12 +88,14 @@ pub fn status() -> AuthStatus {
         None => (false, None),
     };
 
-    // Authenticated state is determined ONLY by the keyring or an explicit
-    // env var. The presence of a CLI/IDE auth.json on disk is a *candidate*
-    // for sign-in, not a sign-in itself — otherwise sign-out would silently
-    // re-adopt the IDE token on the very next status refresh, making
-    // sign-out feel broken.
-    let (authenticated, source, user) = if let Ok(Some(_)) = vault::get(VAULT_KEY) {
+    // Authenticated state is determined by an explicit sign-in source
+    // only: the in-process cache, the OS keyring, or `CURSOR_API_KEY`.
+    // The on-disk auth.json from Cursor IDE/CLI is a *candidate* the user
+    // can opt into through the AuthDialog — never automatic — otherwise
+    // sign-out would silently re-adopt it.
+    let (authenticated, source, user) = if cache_get().is_some() {
+        (true, AuthSource::Keyring, None)
+    } else if let Ok(Some(_)) = vault::get(VAULT_KEY) {
         (true, AuthSource::Keyring, None)
     } else if std::env::var("CURSOR_API_KEY").is_ok() {
         (true, AuthSource::EnvVar, None)
@@ -97,11 +122,18 @@ pub fn status() -> AuthStatus {
     }
 }
 
-/// Returns the active token used by the SDK. Only sources we consider an
-/// explicit sign-in: keyring, env var. The CLI / IDE `auth.json` is reached
-/// via [`adopt_cli_token`] under user consent, never automatically.
+/// Returns the active token used by the SDK. Sources, in order:
+/// in-process cache → keyring → `CURSOR_API_KEY`. The CLI / IDE
+/// `auth.json` is reached via [`adopt_cli_token`] under user consent,
+/// never automatically.
 pub fn active_token() -> anyhow::Result<Option<String>> {
+    if let Some(t) = cache_get() {
+        return Ok(Some(t));
+    }
     if let Some(t) = vault::get(VAULT_KEY)? {
+        // Promote keyring hits into the cache so subsequent reads are O(1)
+        // and so a flaky keyring backend can't drop us mid-session.
+        cache_set(Some(t.clone()));
         return Ok(Some(t));
     }
     if let Ok(t) = std::env::var("CURSOR_API_KEY") {
@@ -126,12 +158,24 @@ pub fn save_token(token: &str) -> anyhow::Result<()> {
     if trimmed.is_empty() {
         anyhow::bail!("empty token");
     }
-    vault::set(VAULT_KEY, trimmed).context("storing token in vault")?;
+    // Cache is always written first — that's our authoritative source for
+    // this process. Keyring is a best-effort persistence layer; if it
+    // happens to be flaky on this Windows session we just lose
+    // cross-launch persistence (the user re-pastes once on next start),
+    // not the current session.
+    cache_set(Some(trimmed.to_string()));
+    if let Err(e) = vault::set(VAULT_KEY, trimmed) {
+        tracing::warn!(error = %e, "keyring write failed, token kept in memory only");
+    }
     Ok(())
 }
 
 pub fn forget_token() -> anyhow::Result<()> {
-    vault::delete(VAULT_KEY).context("deleting token from vault")
+    cache_set(None);
+    if let Err(e) = vault::delete(VAULT_KEY) {
+        tracing::warn!(error = %e, "keyring delete failed (cache already cleared)");
+    }
+    Ok(())
 }
 
 /// Spawn the `cursor-agent login` browser flow and wait for it to exit. Does
