@@ -8,10 +8,13 @@ import {
   Search,
   KeyRound,
   Settings as Cog,
+  LogIn,
+  LogOut,
 } from "lucide-react";
 
 import { useUI } from "@/store/ui";
 import { useSessions } from "@/store/sessions";
+import { useAuth } from "@/store/auth";
 import { THEMES } from "@/lib/themes";
 import { ipc } from "@/lib/ipc";
 
@@ -20,9 +23,12 @@ export function CommandPalette() {
   const togglePalette = useUI((s) => s.togglePalette);
   const toggleConnect = useUI((s) => s.toggleConnect);
   const toggleAi = useUI((s) => s.toggleAi);
+  const toggleAuth = useUI((s) => s.toggleAuth);
   const setTheme = useUI((s) => s.setTheme);
   const addTab = useSessions((s) => s.addTab);
   const patchTab = useSessions((s) => s.patchTab);
+  const authStatus = useAuth((s) => s.status);
+  const forgetAuth = useAuth((s) => s.forget);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -103,6 +109,27 @@ export function CommandPalette() {
               >
                 Toggle AI sidebar
               </Item>
+              {authStatus?.authenticated ? (
+                <Item
+                  icon={<LogOut className="h-4 w-4" />}
+                  onSelect={() => {
+                    togglePalette(false);
+                    forgetAuth();
+                  }}
+                >
+                  Sign out of Cursor{authStatus.user ? ` (${authStatus.user})` : ""}
+                </Item>
+              ) : (
+                <Item
+                  icon={<LogIn className="h-4 w-4" />}
+                  onSelect={() => {
+                    togglePalette(false);
+                    toggleAuth(true);
+                  }}
+                >
+                  Sign in to Cursor with email
+                </Item>
+              )}
             </Command.Group>
             <Command.Group heading="Theme">
               {THEMES.map((t) => (

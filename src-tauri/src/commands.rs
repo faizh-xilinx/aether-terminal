@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
+use tauri_plugin_shell::ShellExt;
 
 use crate::ai::AiBridge;
+use crate::auth::{self, AuthStatus};
 use crate::error::{AetherError, AetherResult};
 use crate::session::{LocalOpts, SshOpts};
 use crate::ssh_config;
@@ -145,7 +147,14 @@ pub async fn ai_create_agent(
     cwd: Option<String>,
     model: Option<String>,
 ) -> AetherResult<String> {
-    get_ai(&state).await?.create_agent(cwd, model).await
+    let api_key = auth::active_token()
+        .map_err(|e| AetherError::Vault(e.to_string()))?;
+    if api_key.is_none() {
+        return Err(AetherError::Other(anyhow::anyhow!(
+            "not signed in to Cursor — open the AI sidebar to sign in"
+        )));
+    }
+    get_ai(&state).await?.create_agent(cwd, model, api_key).await
 }
 
 #[tauri::command]
@@ -160,4 +169,57 @@ pub async fn ai_send(
 #[tauri::command]
 pub async fn ai_dispose(state: State<'_, AppState>, agent_id: String) -> AetherResult<()> {
     get_ai(&state).await?.dispose(&agent_id).await
+}
+
+#[tauri::command]
+pub async fn auth_status() -> AetherResult<AuthStatus> {
+    Ok(auth::status())
+}
+
+#[tauri::command]
+pub async fn auth_save_token(token: String) -> AetherResult<()> {
+    auth::save_token(&token).map_err(|e| AetherError::Vault(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn auth_forget() -> AetherResult<()> {
+    auth::forget_token().map_err(|e| AetherError::Vault(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn auth_run_cli_login() -> AetherResult<()> {
+    auth::run_cli_login()
+        .await
+        .map_err(|e| AetherError::Other(anyhow::anyhow!(e)))
+}
+
+#[tauri::command]
+pub async fn auth_adopt_cli_token() -> AetherResult<bool> {
+    auth::adopt_cli_token().map_err(|e| AetherError::Vault(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn auth_open_dashboard(app: tauri::AppHandle) -> AetherResult<()> {
+    app.shell()
+        .open("https://cursor.com/dashboard/integrations", None)
+        .map_err(|e| AetherError::Other(anyhow::anyhow!(e)))
+}
+
+/// Best-effort install of the cursor-agent CLI via npm. Returns the path on
+/// success.
+#[tauri::command]
+pub async fn auth_install_cli() -> AetherResult<String> {
+    use tokio::process::Command;
+    let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
+    let status = Command::new(npm)
+        .args(["install", "-g", "cursor-agent"])
+        .status()
+        .await
+        .map_err(|e| AetherError::Other(anyhow::anyhow!("spawn npm: {e}")))?;
+    if !status.success() {
+        return Err(AetherError::Other(anyhow::anyhow!(
+            "npm install -g cursor-agent failed"
+        )));
+    }
+    Ok("installed".into())
 }

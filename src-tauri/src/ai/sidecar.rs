@@ -151,13 +151,21 @@ impl AiBridge {
         }
     }
 
-    pub async fn create_agent(&self, cwd: Option<String>, model: Option<String>) -> AetherResult<String> {
+    pub async fn create_agent(
+        &self,
+        cwd: Option<String>,
+        model: Option<String>,
+        api_key: Option<String>,
+    ) -> AetherResult<String> {
         let mut params = json!({});
         if let Some(c) = cwd {
             params["cwd"] = json!(c);
         }
         if let Some(m) = model {
             params["model"] = json!(m);
+        }
+        if let Some(k) = api_key {
+            params["apiKey"] = json!(k);
         }
         let result = self.rpc("agent.create", params).await?;
         Ok(result

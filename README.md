@@ -21,7 +21,7 @@ Aether is a fast, beautiful, security-first SSH terminal with Cursor-powered AI 
 ## Highlights
 
 - **Native performance.** Tauri 2 + Rust core. Cold start under 200 ms, idle RAM under 100 MB.
-- **Cursor-powered AI.** Inline "Fix with AI" on errors, natural-language → command, session summaries, host-aware Q&A. Powered by `@cursor/sdk` running in a sandboxed Node sidecar.
+- **Cursor-powered AI.** One-click sign-in with your Cursor account email — no API key juggling. Inline "Fix with AI" on errors, natural-language → command, session summaries, host-aware Q&A. Powered by `@cursor/sdk` running in a sandboxed Node sidecar.
 - **MCP host + client.** Aether ships a built-in MCP server that exposes remote-shell primitives so any agent (Cursor, Claude Desktop, Cline) can drive your terminal.
 - **First-class SSH.** Reads `~/.ssh/config`, fuzzy quick-connect, key + agent + password auth, port forwards, SFTP browser, broadcast input across panes, auto-reconnect.
 - **Encrypted vault.** Credentials encrypted via Windows DPAPI / macOS Keychain / libsecret. Never plaintext.
@@ -88,6 +88,16 @@ npm run tauri build
 ```
 
 Installer lands in `src-tauri/target/release/bundle/`.
+
+## Signing in
+
+The first time you open the AI sidebar, Aether prompts you to sign in:
+
+- **Recommended — browser sign-in.** If the official `cursor-agent` CLI is on your PATH (one-click install offered inside Aether, or run `npm install -g cursor-agent`), Aether shells out to `cursor-agent login`. Cursor opens your default browser, you sign in with your email, and Aether copies the credential into your OS keyring.
+- **Fallback — paste a key.** Without the CLI, Aether opens [`cursor.com/dashboard/integrations`](https://cursor.com/dashboard/integrations) for you. Generate a key there, paste it once, and Aether validates + stores it. You'll never see it again.
+- **Power user — env var.** Set `CURSOR_API_KEY` and Aether picks it up implicitly.
+
+In every mode, the secret is held in the OS keyring (DPAPI on Windows, Keychain on macOS, libsecret on Linux). It is never written to the Aether config file or to disk in plaintext. Sign out from the AI sidebar header pill or the command palette.
 
 ## Configuration
 

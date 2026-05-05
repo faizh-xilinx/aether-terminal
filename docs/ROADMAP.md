@@ -24,8 +24,9 @@
 
 ## Phase 3 — AI
 - [x] Sidecar with `@cursor/sdk` and JSON-RPC
-- [ ] Wire sidecar to Rust + renderer events
-- [ ] AI sidebar with streaming output
+- [x] One-click sign-in with Cursor email (browser flow + keyring storage)
+- [x] Wire sidecar to Rust + renderer commands
+- [ ] Streaming output (token-by-token) in AI sidebar
 - [ ] Inline "Fix with AI" chip on non-zero exit codes
 - [ ] Natural-language → command (with confirmation gate)
 - [ ] Custom MCP server: `run_remote`, `read_remote_file`, `tail_log`

@@ -1,4 +1,5 @@
 mod ai;
+mod auth;
 mod commands;
 mod error;
 mod known_hosts;
@@ -61,6 +62,13 @@ pub fn run() {
             commands::ai_create_agent,
             commands::ai_send,
             commands::ai_dispose,
+            commands::auth_status,
+            commands::auth_save_token,
+            commands::auth_forget,
+            commands::auth_run_cli_login,
+            commands::auth_adopt_cli_token,
+            commands::auth_open_dashboard,
+            commands::auth_install_cli,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aether");

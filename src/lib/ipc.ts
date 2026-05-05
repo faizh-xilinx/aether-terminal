@@ -108,4 +108,41 @@ export const ipc = {
   aiDispose(agentId: string): Promise<void> {
     return invoke("ai_dispose", { agentId });
   },
+
+  // ── Cursor authentication ────────────────────────────────────────────────
+  authStatus(): Promise<AuthStatus> {
+    return invoke("auth_status");
+  },
+
+  authSaveToken(token: string): Promise<void> {
+    return invoke("auth_save_token", { token });
+  },
+
+  authForget(): Promise<void> {
+    return invoke("auth_forget");
+  },
+
+  authRunCliLogin(): Promise<void> {
+    return invoke("auth_run_cli_login");
+  },
+
+  authAdoptCliToken(): Promise<boolean> {
+    return invoke("auth_adopt_cli_token");
+  },
+
+  authOpenDashboard(): Promise<void> {
+    return invoke("auth_open_dashboard");
+  },
+
+  authInstallCli(): Promise<string> {
+    return invoke("auth_install_cli");
+  },
 };
+
+export interface AuthStatus {
+  authenticated: boolean;
+  source: "none" | "keyring" | "env_var" | "cursor_cli";
+  cli_available: boolean;
+  cli_path: string | null;
+  user: string | null;
+}

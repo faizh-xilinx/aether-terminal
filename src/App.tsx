@@ -8,8 +8,10 @@ import { StatusBar } from "@/components/StatusBar";
 import { CommandPalette } from "@/components/CommandPalette";
 import { QuickConnect } from "@/components/QuickConnect";
 import { AISidebar } from "@/components/AISidebar";
+import { AuthDialog } from "@/components/AuthDialog";
 import { useSessions } from "@/store/sessions";
 import { useUI } from "@/store/ui";
+import { useAuth } from "@/store/auth";
 import { ipc } from "@/lib/ipc";
 
 export default function App() {
@@ -18,9 +20,16 @@ export default function App() {
   const addTab = useSessions((s) => s.addTab);
   const patchTab = useSessions((s) => s.patchTab);
   const aiOpen = useUI((s) => s.aiOpen);
+  const authOpen = useUI((s) => s.authOpen);
   const togglePalette = useUI((s) => s.togglePalette);
   const toggleConnect = useUI((s) => s.toggleConnect);
   const toggleAi = useUI((s) => s.toggleAi);
+  const toggleAuth = useUI((s) => s.toggleAuth);
+  const refreshAuth = useAuth((s) => s.refresh);
+
+  useEffect(() => {
+    refreshAuth();
+  }, [refreshAuth]);
 
   useEffect(() => {
     if (tabs.length === 0) {
@@ -90,6 +99,7 @@ export default function App() {
       <StatusBar />
       <CommandPalette />
       <QuickConnect />
+      <AuthDialog open={authOpen} onOpenChange={(o) => toggleAuth(o)} />
     </div>
   );
 }
