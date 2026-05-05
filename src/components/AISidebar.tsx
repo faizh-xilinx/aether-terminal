@@ -1,12 +1,22 @@
-import { useState } from "react";
-import { Bot, Send, Sparkles, Wand2, Lightbulb } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  Bot,
+  Send,
+  Sparkles,
+  Wand2,
+  Lightbulb,
+  AlertCircle,
+  Loader2,
+} from "lucide-react";
 
 import { cn } from "@/lib/cn";
+import { ipc } from "@/lib/ipc";
 
 interface Message {
   id: string;
   role: "user" | "assistant" | "system";
   text: string;
+  pending?: boolean;
 }
 
 const SUGGESTIONS = [
@@ -30,25 +40,72 @@ export function AISidebar() {
       id: "welcome",
       role: "assistant",
       text:
-        "Hi — I’m your terminal copilot. Ask me about the current host, paste an error, or request a command. I’ll see your scrollback when you opt in.",
+        "Hi — I'm your terminal copilot. Set CURSOR_API_KEY in your environment, then ask me about the current host, paste an error, or request a command.",
     },
   ]);
   const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const agentIdRef = useRef<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
-  const send = () => {
+  useEffect(() => {
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [messages]);
+
+  const ensureAgent = async (): Promise<string> => {
+    if (agentIdRef.current) return agentIdRef.current;
+    const id = await ipc.aiCreateAgent(undefined, undefined);
+    agentIdRef.current = id;
+    return id;
+  };
+
+  const send = async () => {
     const trimmed = input.trim();
-    if (!trimmed) return;
-    setMessages((m) => [
-      ...m,
-      { id: crypto.randomUUID(), role: "user", text: trimmed },
-      {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        text:
-          "(SDK sidecar not yet connected — once wired, this is where streaming Cursor responses appear.)",
-      },
-    ]);
+    if (!trimmed || busy) return;
+    setError(null);
     setInput("");
+    const userMsg: Message = {
+      id: crypto.randomUUID(),
+      role: "user",
+      text: trimmed,
+    };
+    const placeholder: Message = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      text: "",
+      pending: true,
+    };
+    setMessages((m) => [...m, userMsg, placeholder]);
+    setBusy(true);
+    try {
+      const agentId = await ensureAgent();
+      const res = await ipc.aiSend(agentId, trimmed);
+      const text =
+        typeof res.result === "string" && res.result.length > 0
+          ? res.result
+          : `(no text result — status: ${res.status})`;
+      setMessages((m) =>
+        m.map((msg) =>
+          msg.id === placeholder.id ? { ...msg, text, pending: false } : msg
+        )
+      );
+    } catch (e) {
+      const msg = String(e);
+      setError(msg);
+      setMessages((m) =>
+        m.map((x) =>
+          x.id === placeholder.id
+            ? { ...x, text: msg, pending: false, role: "system" }
+            : x
+        )
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -61,21 +118,38 @@ export function AISidebar() {
         <span className="pill ml-auto">composer-2</span>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3">
         {messages.map((m) => (
           <div
             key={m.id}
             className={cn(
-              "rounded-lg px-3 py-2 text-[13px] leading-relaxed",
-              m.role === "user"
-                ? "ml-8 bg-accent/15 border border-accent/20 text-fg"
-                : "mr-4 bg-bg-elevated border border-border text-fg-muted"
+              "rounded-lg px-3 py-2 text-[13px] leading-relaxed whitespace-pre-wrap break-words",
+              m.role === "user" &&
+                "ml-8 bg-accent/15 border border-accent/20 text-fg",
+              m.role === "assistant" &&
+                "mr-4 bg-bg-elevated border border-border text-fg",
+              m.role === "system" &&
+                "mr-4 bg-danger/10 border border-danger/30 text-danger"
             )}
           >
-            {m.text}
+            {m.pending ? (
+              <span className="inline-flex items-center gap-2 text-fg-muted">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                thinking…
+              </span>
+            ) : (
+              m.text
+            )}
           </div>
         ))}
       </div>
+
+      {error && (
+        <div className="mx-3 mb-2 px-2.5 py-1.5 rounded-md bg-danger/10 border border-danger/30 text-[11px] text-danger flex items-start gap-1.5">
+          <AlertCircle className="h-3 w-3 mt-0.5 shrink-0" />
+          <span className="break-all">{error}</span>
+        </div>
+      )}
 
       <div className="px-3 pb-2 grid grid-cols-1 gap-1.5">
         {SUGGESTIONS.map((s, i) => (
@@ -105,15 +179,21 @@ export function AISidebar() {
             }}
             placeholder="Ask anything about this host…"
             rows={2}
-            className="input resize-none pr-10"
+            disabled={busy}
+            className="input resize-none pr-10 disabled:opacity-50"
           />
           <button
             onClick={send}
+            disabled={busy}
             className="absolute right-2 bottom-2 h-7 w-7 inline-flex items-center
                        justify-center rounded-md bg-accent/20 text-accent
-                       hover:bg-accent/30"
+                       hover:bg-accent/30 disabled:opacity-50"
           >
-            <Send className="h-3.5 w-3.5" />
+            {busy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Send className="h-3.5 w-3.5" />
+            )}
           </button>
         </div>
         <div className="mt-1.5 text-[10px] text-fg-subtle">

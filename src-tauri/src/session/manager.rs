@@ -26,6 +26,9 @@ pub struct SshOpts {
     pub private_key_path: Option<String>,
     pub private_key_passphrase: Option<String>,
     pub use_agent: bool,
+    /// If true, an unknown host key will be accepted and added to known_hosts
+    /// (trust-on-first-use). If false, unknown keys cause connection failure.
+    pub trust_unknown_host_key: bool,
     pub cols: u16,
     pub rows: u16,
 }
@@ -55,6 +58,10 @@ impl SessionManager {
             sessions: DashMap::new(),
             meta: DashMap::new(),
         }
+    }
+
+    pub fn app_handle(&self) -> &AppHandle {
+        &self.app
     }
 
     pub async fn open_local(&self, opts: LocalOpts) -> AetherResult<String> {

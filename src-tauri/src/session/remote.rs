@@ -2,16 +2,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use russh::client::{Config, Handle, Handler, Msg, Session};
-use russh::keys::{decode_secret_key, key, load_secret_key};
-use russh::{Channel, ChannelId, ChannelMsg, Disconnect};
+use russh::client::{Config, Handle, Handler, Msg};
+use russh::keys::{key, load_secret_key};
+use russh::{Channel, ChannelMsg, Disconnect};
 use tauri::AppHandle;
 use tokio::sync::Mutex;
 
 use crate::error::{AetherError, AetherResult};
+use crate::known_hosts::{self, HostKeyDecision};
 use crate::session::manager::{SessionManager, SshOpts};
 
-struct ClientHandler;
+struct ClientHandler {
+    host: String,
+    port: u16,
+    trust_unknown: bool,
+}
 
 #[async_trait]
 impl Handler for ClientHandler {
@@ -19,11 +24,43 @@ impl Handler for ClientHandler {
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &key::PublicKey,
+        server_public_key: &key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        // TODO: known_hosts verification with TOFU prompt.
-        // For alpha, accept any host key. Will be replaced before beta.
-        Ok(true)
+        let decision = known_hosts::check(&self.host, self.port, server_public_key)
+            .map_err(|e| russh::Error::IO(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        match decision {
+            HostKeyDecision::Match => Ok(true),
+            HostKeyDecision::Mismatch { stored_type } => {
+                tracing::error!(
+                    host = %self.host,
+                    port = self.port,
+                    stored_type = %stored_type,
+                    presented_type = %server_public_key.name(),
+                    "host key mismatch \u{2014} possible MITM, refusing connection"
+                );
+                Ok(false)
+            }
+            HostKeyDecision::Unknown => {
+                if !self.trust_unknown {
+                    tracing::warn!(
+                        host = %self.host,
+                        port = self.port,
+                        "unknown host key and TOFU disabled \u{2014} refusing"
+                    );
+                    return Ok(false);
+                }
+                if let Err(e) = known_hosts::add(&self.host, self.port, server_public_key) {
+                    tracing::warn!(error = %e, "failed to persist new known_hosts entry (continuing)");
+                }
+                tracing::info!(
+                    host = %self.host,
+                    port = self.port,
+                    fingerprint_type = %server_public_key.name(),
+                    "added new host key to known_hosts (TOFU)"
+                );
+                Ok(true)
+            }
+        }
     }
 }
 
@@ -47,7 +84,12 @@ impl SshSession {
             ..Default::default()
         });
 
-        let mut handle = russh::client::connect(config, (opts.host.as_str(), opts.port), ClientHandler)
+        let handler = ClientHandler {
+            host: opts.host.clone(),
+            port: opts.port,
+            trust_unknown: opts.trust_unknown_host_key,
+        };
+        let mut handle = russh::client::connect(config, (opts.host.as_str(), opts.port), handler)
             .await
             .map_err(|e| AetherError::Ssh(format!("connect failed: {e}")))?;
 
@@ -189,8 +231,3 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &SshOpts) -> Aet
     Ok(false)
 }
 
-// Silence unused-import warnings on platforms where decode_secret_key/ChannelId aren't referenced.
-#[allow(dead_code)]
-fn _kept_imports(_: ChannelId, _: &[u8]) {
-    let _ = decode_secret_key::<&str>;
-}

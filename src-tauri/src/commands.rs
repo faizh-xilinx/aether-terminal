@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
+use crate::ai::AiBridge;
 use crate::error::{AetherError, AetherResult};
 use crate::session::{LocalOpts, SshOpts};
 use crate::ssh_config;
@@ -36,6 +37,7 @@ pub struct OpenSshArgs {
     pub private_key_path: Option<String>,
     pub private_key_passphrase: Option<String>,
     pub use_agent: Option<bool>,
+    pub trust_unknown_host_key: Option<bool>,
     pub cols: u16,
     pub rows: u16,
 }
@@ -52,6 +54,7 @@ pub async fn open_ssh(state: State<'_, AppState>, args: OpenSshArgs) -> AetherRe
             private_key_path: args.private_key_path,
             private_key_passphrase: args.private_key_passphrase,
             use_agent: args.use_agent.unwrap_or(false),
+            trust_unknown_host_key: args.trust_unknown_host_key.unwrap_or(true),
             cols: args.cols,
             rows: args.rows,
         })
@@ -119,4 +122,42 @@ pub async fn vault_delete(key: String) -> AetherResult<()> {
 #[tauri::command]
 pub fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+async fn get_ai(state: &State<'_, AppState>) -> AetherResult<AiBridge> {
+    let app = state.sessions.app_handle().clone();
+    let dir = state.sidecar_dir.clone();
+    let cell = state.ai.clone();
+    let bridge = cell
+        .get_or_try_init(|| async move { AiBridge::spawn(app, dir).await })
+        .await?;
+    Ok(bridge.clone())
+}
+
+#[tauri::command]
+pub async fn ai_ping(state: State<'_, AppState>) -> AetherResult<()> {
+    get_ai(&state).await?.ping().await
+}
+
+#[tauri::command]
+pub async fn ai_create_agent(
+    state: State<'_, AppState>,
+    cwd: Option<String>,
+    model: Option<String>,
+) -> AetherResult<String> {
+    get_ai(&state).await?.create_agent(cwd, model).await
+}
+
+#[tauri::command]
+pub async fn ai_send(
+    state: State<'_, AppState>,
+    agent_id: String,
+    prompt: String,
+) -> AetherResult<serde_json::Value> {
+    get_ai(&state).await?.send(&agent_id, &prompt).await
+}
+
+#[tauri::command]
+pub async fn ai_dispose(state: State<'_, AppState>, agent_id: String) -> AetherResult<()> {
+    get_ai(&state).await?.dispose(&agent_id).await
 }

@@ -91,4 +91,21 @@ export const ipc = {
   onSessionExit(id: string, cb: (code: number) => void): Promise<UnlistenFn> {
     return listen<number>(`session:exit:${id}`, (event) => cb(event.payload));
   },
+
+  // ── AI bridge (sidecar @cursor/sdk) ──────────────────────────────────────
+  aiPing(): Promise<void> {
+    return invoke("ai_ping");
+  },
+
+  aiCreateAgent(cwd?: string, model?: string): Promise<string> {
+    return invoke("ai_create_agent", { cwd, model });
+  },
+
+  aiSend(agentId: string, prompt: string): Promise<{ status: string; result?: string }> {
+    return invoke("ai_send", { agentId, prompt });
+  },
+
+  aiDispose(agentId: string): Promise<void> {
+    return invoke("ai_dispose", { agentId });
+  },
 };

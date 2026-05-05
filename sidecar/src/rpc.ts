@@ -1,6 +1,8 @@
-import { Agent, CursorAgentError, type AgentInstance } from "@cursor/sdk";
+import { Agent, CursorAgentError, type SDKAgent } from "@cursor/sdk";
 
 import { logger } from "./logger.js";
+
+type AgentInstance = SDKAgent;
 
 interface RpcRequest {
   id: string | number;
@@ -42,7 +44,7 @@ export async function handleRequest(payload: unknown): Promise<RpcResponse | nul
         const cwd = (payload.params?.cwd as string | undefined) ?? process.cwd();
         const model =
           (payload.params?.model as string | undefined) ?? "composer-2";
-        const agent = Agent.create({
+        const agent = await Agent.create({
           apiKey,
           model: { id: model },
           local: { cwd, settingSources: [] },
@@ -106,8 +108,7 @@ function readApiKey(params?: Record<string, unknown>): string {
   if (typeof fromParams === "string" && fromParams.length > 0) return fromParams;
   const fromEnv = process.env.CURSOR_API_KEY;
   if (fromEnv && fromEnv.length > 0) return fromEnv;
-  throw new CursorAgentError(
-    "CURSOR_API_KEY not set; pass apiKey in params or set the env var",
-    { isRetryable: false }
+  throw new Error(
+    "CURSOR_API_KEY not set; pass apiKey in params or set the env var"
   );
 }

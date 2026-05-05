@@ -1,17 +1,23 @@
+mod ai;
 mod commands;
 mod error;
+mod known_hosts;
 mod session;
 mod ssh_config;
 mod vault;
 
 use std::sync::Arc;
 
+use ai::AiBridge;
 use session::SessionManager;
 use tauri::Manager;
+use tokio::sync::OnceCell;
 use tracing_subscriber::EnvFilter;
 
 pub struct AppState {
     pub sessions: Arc<SessionManager>,
+    pub ai: Arc<OnceCell<AiBridge>>,
+    pub sidecar_dir: std::path::PathBuf,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -30,8 +36,13 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let handle = app.handle().clone();
-            let sessions = Arc::new(SessionManager::new(handle));
-            app.manage(AppState { sessions });
+            let sessions = Arc::new(SessionManager::new(handle.clone()));
+            let sidecar_dir = sidecar_dir(&handle);
+            app.manage(AppState {
+                sessions,
+                ai: Arc::new(OnceCell::new()),
+                sidecar_dir,
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -46,7 +57,35 @@ pub fn run() {
             commands::vault_get,
             commands::vault_delete,
             commands::app_version,
+            commands::ai_ping,
+            commands::ai_create_agent,
+            commands::ai_send,
+            commands::ai_dispose,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aether");
+}
+
+/// Resolves the path to the bundled sidecar JS entry. In dev we point to the
+/// repo's `sidecar/` checkout; in a packaged build the sidecar ships as a
+/// resource.
+fn sidecar_dir(handle: &tauri::AppHandle) -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("AETHER_SIDECAR_DIR") {
+        return std::path::PathBuf::from(dir);
+    }
+    if let Ok(resource) = handle
+        .path()
+        .resolve("sidecar", tauri::path::BaseDirectory::Resource)
+    {
+        if resource.exists() {
+            return resource;
+        }
+    }
+    let cwd = std::env::current_dir().unwrap_or_default();
+    if cwd.join("sidecar").exists() {
+        return cwd.join("sidecar");
+    }
+    cwd.parent()
+        .map(|p| p.join("sidecar"))
+        .unwrap_or_else(|| cwd.join("sidecar"))
 }
