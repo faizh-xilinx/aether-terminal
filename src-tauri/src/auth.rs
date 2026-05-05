@@ -213,7 +213,13 @@ fn find_cursor_cli() -> Option<PathBuf> {
     }
     if cfg!(windows) {
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            // Order matches the official Cursor install script's actual
+            // layout (`%LOCALAPPDATA%\cursor-agent\agent.exe`, no /bin
+            // subdirectory) plus a few alternate locations from older
+            // distributions / community ports.
             for sub in [
+                "cursor-agent\\agent.exe",
+                "cursor-agent\\cursor-agent.exe",
                 "cursor-agent\\bin\\agent.exe",
                 "Programs\\cursor-cli\\agent.exe",
                 "Programs\\cursor-agent\\agent.exe",

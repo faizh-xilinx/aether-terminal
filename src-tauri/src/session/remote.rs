@@ -96,7 +96,12 @@ impl SshSession {
         #[allow(unused_mut)]
         let mut handle = russh::client::connect(config, (opts.host.as_str(), opts.port), handler)
             .await
-            .map_err(|e| AetherError::Ssh(format!("connect failed: {e}")))?;
+            .map_err(|e| {
+                AetherError::Ssh(format!(
+                    "could not reach {}:{} ({}). Check the hostname and port, that the SSH server is running, and that no firewall blocks the connection.",
+                    opts.host, opts.port, e
+                ))
+            })?;
 
         // `authenticate` returns Err with a rich message on failure, so the
         // success path is the only `Ok` branch we care about here.
