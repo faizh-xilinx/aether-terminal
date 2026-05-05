@@ -26,14 +26,13 @@ function leaf(paneId: PaneId, tabId: string): Layout {
 }
 
 function setRatioAt(layout: Layout, path: number[], ratio: number): Layout {
-  if (path.length === 0 || layout.kind !== "split") return layout;
-  const [head, ...rest] = path;
-  if (head === undefined) return layout;
-  if (rest.length === 0) {
+  if (layout.kind !== "split") return layout;
+  // An empty path means "this is the split node we want to resize".
+  if (path.length === 0) {
     return { ...layout, ratio: Math.max(0.1, Math.min(0.9, ratio)) };
   }
-  if (head === 0)
-    return { ...layout, a: setRatioAt(layout.a, rest, ratio) };
+  const [head, ...rest] = path;
+  if (head === 0) return { ...layout, a: setRatioAt(layout.a, rest, ratio) };
   return { ...layout, b: setRatioAt(layout.b, rest, ratio) };
 }
 

@@ -247,7 +247,11 @@ fn auth_json_candidates() -> Vec<PathBuf> {
     if cfg!(windows) {
         if let Ok(roaming) = std::env::var("APPDATA") {
             out.push(PathBuf::from(&roaming).join("Cursor").join("auth.json"));
-            out.push(PathBuf::from(&roaming).join("cursor-agent").join("auth.json"));
+            out.push(
+                PathBuf::from(&roaming)
+                    .join("cursor-agent")
+                    .join("auth.json"),
+            );
         }
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             out.push(PathBuf::from(&local).join("cursor-agent").join("auth.json"));
@@ -257,8 +261,18 @@ fn auth_json_candidates() -> Vec<PathBuf> {
 
     if cfg!(target_os = "macos") {
         if let Some(home) = dirs::home_dir() {
-            out.push(home.join("Library").join("Application Support").join("Cursor").join("auth.json"));
-            out.push(home.join("Library").join("Application Support").join("cursor-agent").join("auth.json"));
+            out.push(
+                home.join("Library")
+                    .join("Application Support")
+                    .join("Cursor")
+                    .join("auth.json"),
+            );
+            out.push(
+                home.join("Library")
+                    .join("Application Support")
+                    .join("cursor-agent")
+                    .join("auth.json"),
+            );
         }
     }
 
@@ -294,10 +308,10 @@ pub fn read_cursor_cli_token() -> anyhow::Result<Option<CliToken>> {
     };
 
     tracing::info!(path = %path.display(), "reading cursor auth.json");
-    let raw = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    let value: serde_json::Value = serde_json::from_str(&raw)
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let raw =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
 
     // The file format is not officially stable; probe a few likely fields.
     let access_token = ["accessToken", "access_token", "apiKey", "api_key", "token"]
@@ -473,13 +487,53 @@ mod tests {
         // `vault::get` returns None for an unused key. The keyring step is
         // exercised in the integration tests.)
         let _g = ENV_LOCK.lock().unwrap();
+        cache_set(None); // ensure cache doesn't leak from a prior test
         let dir = tempdir();
         std::env::set_var("CURSOR_CONFIG_DIR", &dir);
         std::env::set_var("CURSOR_API_KEY", "env-only-key");
         let active = active_token().unwrap();
         std::env::remove_var("CURSOR_CONFIG_DIR");
         std::env::remove_var("CURSOR_API_KEY");
+        cache_set(None);
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(active.as_deref(), Some("env-only-key"));
+    }
+
+    #[test]
+    fn save_token_makes_active_token_round_trip_via_cache() {
+        // The Windows Credential Manager backend can be flaky; this test
+        // pins the behaviour that survives that flakiness — save_token
+        // populates the in-process cache so active_token() always returns
+        // the just-saved value, even when the keyring read silently fails.
+        let _g = ENV_LOCK.lock().unwrap();
+        cache_set(None);
+        std::env::remove_var("CURSOR_API_KEY");
+
+        save_token("crsr_round_trip_test").expect("save_token");
+        let active = active_token().expect("active_token");
+        assert_eq!(active.as_deref(), Some("crsr_round_trip_test"));
+
+        forget_token().expect("forget_token");
+        let after_forget = active_token().expect("active_token after forget");
+        // Cache is cleared by forget_token; in test env neither keyring
+        // nor env var holds a token, so it should be None.
+        cache_set(None);
+        assert!(after_forget.is_none() || after_forget.as_deref() == Some(""));
+    }
+
+    #[test]
+    fn token_looks_like_api_key_recognises_real_shapes() {
+        assert!(token_looks_like_api_key("crsr_abc123"));
+        assert!(token_looks_like_api_key(
+            "crsr_long_key_with_underscores_AND_uppercase_99"
+        ));
+        // JWTs from auth.json must be rejected.
+        assert!(!token_looks_like_api_key(
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig"
+        ));
+        // Random strings, empty, whitespace.
+        assert!(!token_looks_like_api_key("not-an-api-key"));
+        assert!(!token_looks_like_api_key(""));
+        assert!(!token_looks_like_api_key("   "));
     }
 }

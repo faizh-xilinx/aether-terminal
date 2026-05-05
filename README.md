@@ -4,7 +4,7 @@
 
 Aether is a fast, beautiful, security-first SSH terminal with Cursor-powered AI woven through every interaction. Built with Tauri 2 + Rust + React, it loads in milliseconds, uses ~10x less memory than Electron alternatives, and treats AI as a first-class citizen — not a plugin.
 
-**Status:** alpha — under active development.
+**Status:** **0.1.0 alpha** — first public release. See [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Why Aether
 

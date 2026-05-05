@@ -232,7 +232,11 @@ pub async fn auth_install_cli() -> AetherResult<String> {
     // may extend beyond the moment the binary is usable.
     let target = if cfg!(windows) {
         std::env::var("LOCALAPPDATA")
-            .map(|p| std::path::PathBuf::from(p).join("cursor-agent").join("agent.exe"))
+            .map(|p| {
+                std::path::PathBuf::from(p)
+                    .join("cursor-agent")
+                    .join("agent.exe")
+            })
             .map_err(|_| AetherError::Other(anyhow::anyhow!("LOCALAPPDATA not set")))?
     } else {
         dirs::home_dir()
@@ -265,16 +269,12 @@ pub async fn auth_install_cli() -> AetherResult<String> {
             .spawn()
     } else {
         Command::new("sh")
-            .args([
-                "-c",
-                "curl -fsS https://cursor.com/install | bash",
-            ])
+            .args(["-c", "curl -fsS https://cursor.com/install | bash"])
             .spawn()
     };
 
-    spawn_result.map_err(|e| {
-        AetherError::Other(anyhow::anyhow!("could not start installer shell: {e}"))
-    })?;
+    spawn_result
+        .map_err(|e| AetherError::Other(anyhow::anyhow!("could not start installer shell: {e}")))?;
 
     // Poll for the binary up to 5 minutes. The official installer ships a
     // ~30 MB zip and most users will see it appear within 60 s.

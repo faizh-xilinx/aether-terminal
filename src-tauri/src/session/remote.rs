@@ -247,10 +247,7 @@ impl SshSession {
     }
 }
 
-async fn authenticate(
-    handle: &mut Handle<ClientHandler>,
-    opts: &SshOpts,
-) -> AetherResult<bool> {
+async fn authenticate(handle: &mut Handle<ClientHandler>, opts: &SshOpts) -> AetherResult<bool> {
     let mut tried: Vec<String> = Vec::new();
 
     // 1. Explicit private key file from the connect dialog or ssh_config.
@@ -310,10 +307,7 @@ async fn authenticate(
     if let Some(pw) = opts.password.as_ref() {
         tried.push("password".into());
         tracing::info!(host = %opts.host, "trying password auth");
-        if handle
-            .authenticate_password(opts.user.clone(), pw)
-            .await?
-        {
+        if handle.authenticate_password(opts.user.clone(), pw).await? {
             return Ok(true);
         }
     }
