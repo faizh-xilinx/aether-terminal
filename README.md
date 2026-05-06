@@ -55,7 +55,7 @@ Aether is a fast, beautiful, security-first SSH terminal with Cursor-powered AI 
 - **Backend:** Rust 1.80+, Tokio, russh, portable-pty, keyring
 - **Frontend:** React 18, TypeScript 5, Vite 5, Tailwind 4, Radix UI, Zustand, xterm.js + WebGL addon, cmdk
 - **AI:** `@cursor/sdk` (Node 22 sidecar), `@modelcontextprotocol/sdk`
-- **Build:** GitHub Actions, code-signed installers, Tauri auto-updater
+- **Build:** code-signed installers, Tauri auto-updater
 
 ## Getting started
 
