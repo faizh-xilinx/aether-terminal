@@ -532,7 +532,19 @@ mod tests {
         // pins the behaviour that survives that flakiness — save_token
         // populates the in-process cache so active_token() always returns
         // the just-saved value, even when the keyring read silently fails.
-        let _g = ENV_LOCK.lock().unwrap();
+        // Holds the cross-module file lock so it doesn't race with
+        // `secrets::round_trip_real_dpapi` over session.bin.
+        let _envg = ENV_LOCK.lock().unwrap();
+        let _fileg = secrets::TEST_FILE_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!(
+            "aether-auth-cache-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("AETHER_SECRETS_DIR", &dir);
+
         cache_set(None);
         std::env::remove_var("CURSOR_API_KEY");
 
@@ -542,10 +554,11 @@ mod tests {
 
         forget_token().expect("forget_token");
         let after_forget = active_token().expect("active_token after forget");
-        // Cache is cleared by forget_token; in test env neither keyring
-        // nor env var holds a token, so it should be None.
         cache_set(None);
         assert!(after_forget.is_none() || after_forget.as_deref() == Some(""));
+
+        std::env::remove_var("AETHER_SECRETS_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// End-to-end persistence test: save_token → wipe in-process state
@@ -555,15 +568,26 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn save_then_simulated_restart_yields_active_token() {
-        let _g = ENV_LOCK.lock().unwrap();
+        // Acquire BOTH locks: the env-var lock (used by other auth tests)
+        // and the cross-module file lock that secrets::tests also holds.
+        // Without the file lock, parallel `cargo test` clobbers
+        // session.bin between this test and `secrets::round_trip_real_dpapi`.
+        let _envg = ENV_LOCK.lock().unwrap();
+        let _fileg = secrets::TEST_FILE_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
-        // Back up any existing real session so we don't clobber the user's
-        // live state during the test, then start from a clean slate.
-        let prior = vault::get(VAULT_KEY).ok().flatten();
-        let prior_disk = secrets::load().ok().flatten();
+        // Redirect the encrypted-file location to a per-test temp dir so
+        // we never touch the developer's real session.bin.
+        let dir = std::env::temp_dir().join(format!(
+            "aether-auth-persist-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("AETHER_SECRETS_DIR", &dir);
+
         cache_set(None);
         let _ = vault::delete(VAULT_KEY);
-        let _ = secrets::forget();
         std::env::remove_var("CURSOR_API_KEY");
 
         save_token("crsr_persistence_marker_e2e").expect("save_token");
@@ -578,20 +602,14 @@ mod tests {
         let active = active_token().expect("active_token");
         assert_eq!(active.as_deref(), Some("crsr_persistence_marker_e2e"));
 
-        // Cleanup. Then restore prior real state so the developer's
-        // actual sign-in is unchanged after the test runs.
         forget_token().expect("forget");
         assert!(
             active_token().expect("active after forget").is_none(),
             "forget_token did not clear the active token"
         );
 
-        if let Some(t) = prior {
-            let _ = vault::set(VAULT_KEY, &t);
-        }
-        if let Some(t) = prior_disk {
-            let _ = secrets::store(&t);
-        }
+        std::env::remove_var("AETHER_SECRETS_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
         cache_set(None);
     }
 

@@ -24,8 +24,16 @@ const SESSION_FILE: &str = "session.bin";
 
 /// Returns the absolute path of the encrypted session file. `None` only when
 /// `dirs::config_dir()` is unavailable (extremely rare).
+///
+/// In tests, set `AETHER_SECRETS_DIR` to redirect the file to a per-test
+/// temporary directory. This lets `secrets::tests` and `auth::tests` (which
+/// both exercise `store`/`load`) run in parallel without racing on the
+/// same real `%APPDATA%\Aether\session.bin`.
 #[cfg(windows)]
 fn session_path() -> Option<PathBuf> {
+    if let Ok(custom) = std::env::var("AETHER_SECRETS_DIR") {
+        return Some(PathBuf::from(custom).join(SESSION_FILE));
+    }
     let mut p = dirs::config_dir()?;
     p.push("Aether");
     Some(p.join(SESSION_FILE))
@@ -166,6 +174,14 @@ pub fn load() -> anyhow::Result<Option<String>> {
     }
 }
 
+/// Module-level lock used by tests in both `secrets::tests` and
+/// `auth::tests` to serialise parallel access to the singleton
+/// `session.bin` file and the `AETHER_SECRETS_DIR` env override. Without
+/// it, a parallel `cargo test` interleaves the two modules' tests and
+/// they clobber each other's tokens.
+#[cfg(test)]
+pub(crate) static TEST_FILE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Remove the encrypted session file, if it exists.
 pub fn forget() -> anyhow::Result<()> {
     #[cfg(windows)]
@@ -187,15 +203,21 @@ pub fn forget() -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
-    /// DPAPI round-trip: write, read back, delete. Does touch
-    /// `%APPDATA%\Aether\session.bin` — but as a unit test on the
-    /// developer's own machine that is acceptable, and we always clean up.
+    /// DPAPI round-trip: write, read back, delete. Redirects the session
+    /// file into a unique temp dir so it can run in parallel with
+    /// `auth::tests` without clobbering their shared file.
     #[test]
     fn round_trip_real_dpapi() {
-        // Take a backup of any pre-existing file so we don't clobber a real
-        // session while testing. Restore it at the end.
-        let backup = load().ok().flatten();
-        forget().expect("pre-test cleanup");
+        let _g = TEST_FILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!(
+            "aether-secrets-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("AETHER_SECRETS_DIR", &dir);
+
+        // Test-isolated dir, so we know it starts empty.
+        assert!(load().expect("initial load").is_none());
 
         store("crsr_dpapi_round_trip_marker_4711").expect("store");
         let read = load().expect("load").expect("Some token");
@@ -204,9 +226,7 @@ mod tests {
         forget().expect("post-test cleanup");
         assert!(load().expect("load after forget").is_none());
 
-        // Restore prior state.
-        if let Some(prev) = backup {
-            store(&prev).expect("restore");
-        }
+        std::env::remove_var("AETHER_SECRETS_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
